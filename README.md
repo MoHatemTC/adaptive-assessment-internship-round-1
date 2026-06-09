@@ -131,10 +131,10 @@ masaar-assessment-platform/
 | Feature | Branch | Owner |
 |---|---|---|
 | Voice interview tool | `feature/voice-tool` | Karim |
-| MCQ protocol tool | `feature/mcq-tool` | TBD |
-| Diagram / image tool | `feature/diagram-tool` | TBD |
-| Camera interview tool | `feature/camera-tool` | TBD |
-| E2B code execution tool | `feature/e2b-tool` | TBD |
+| MCQ protocol tool | `feature/mcq-tool` | Malak |
+| Diagram / image tool | `feature/diagram-tool` | Abutaleb |
+| Camera interview tool | `feature/camera-tool` | Sherif |
+| E2B code execution tool | `feature/e2b-tool` | Nagah |
 
 ---
 
