@@ -130,27 +130,26 @@ masaar-assessment-platform/
 
 | Feature | Branch | Owner |
 |---|---|---|
-| Voice interview tool | `feature/voice-tool` | Karim |
-| MCQ protocol tool | `feature/mcq-tool` | Malak |
-| Diagram / image tool | `feature/diagram-tool` | Abutaleb |
-| Camera interview tool | `feature/camera-tool` | Sherif |
-| E2B code execution tool | `feature/e2b-tool` | Nagah |
+| Voice interview tool | `voice-agent` | Karim |
+| MCQ protocol tool | `mcq-tool` | Malak |
+| Diagram / image tool | `viz-tool` | Abutaleb |
+| Camera interview tool | `avatar-tool` | Sherif |
+| E2B code execution tool | `coding-tool` | Nagah |
 
 ---
 
 ## Branch Strategy
 
 ```
-main          ← demo-ready, PRs only
-  └── develop ← integration, all features merge here first
-        ├── feature/voice-tool
-        ├── feature/mcq-tool
-        ├── feature/diagram-tool
-        ├── feature/camera-tool
-        └── feature/e2b-tool
+main          ← demo-ready, receives PRs from all feature branches
+  ├── voice-agent
+  ├── mcq-tool
+  ├── viz-tool
+  ├── avatar-tool
+  └── coding-tool
 ```
 
-All PRs target `develop`. `develop` → `main` is the only path to production.
+Each team member works on their assigned branch and opens a Pull Request directly into main when their slice is complete.
 
 ---
 
