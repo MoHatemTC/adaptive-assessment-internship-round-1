@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Masaar — Backend Dependencies
+# Verified against PyPI as of June 2026
+# Python 3.12 required
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Web ───────────────────────────────────────────────────────────────────────
+fastapi==0.136.3
+uvicorn[standard]==0.34.0
+websockets==14.2
+
+# ── Database ──────────────────────────────────────────────────────────────────
+# NOTE: pinned to 2.0.x — do NOT upgrade to 2.1.x (beta, breaking changes)
+sqlalchemy[asyncio]==2.0.50
+asyncpg==0.30.0
+alembic==1.15.2
+
+# ── Agent / LLM ───────────────────────────────────────────────────────────────
+# NOTE: LangGraph hit 1.0.0 in Oct 2025 — major API upgrade from 0.2.x
+langchain==0.3.30
+langgraph==1.2.4
+langchain-community==0.3.30
+# Use langchain-litellm (separate package) for LiteLLM integration with LangChain
+langchain-litellm==0.6.6
+litellm==1.88.0
+
+# ── Workers ───────────────────────────────────────────────────────────────────
+celery==5.6.3
+# WARNING: Celery 5.6.3 pins redis ≤ 5.2.1 — do NOT upgrade redis above this
+redis==5.2.1
+
+# ── Vector DB ─────────────────────────────────────────────────────────────────
+qdrant-client==1.14.2
+
+# ── STT ───────────────────────────────────────────────────────────────────────
+# NOTE: deepgram-sdk v7.x has a completely new API vs v3.x
+# Use DeepgramClient() instead of the old Deepgram() class
+deepgram-sdk==7.2.0
+
+# ── Observability ─────────────────────────────────────────────────────────────
+# NOTE: Langfuse v4 is a full rewrite (released March 2026) — OTel-based tracing
+# v2.x integration code will NOT work — read the migration guide before coding
+langfuse==4.7.1
+
+# ── Validation / Config ───────────────────────────────────────────────────────
+pydantic==2.11.5
+pydantic-settings==2.9.1
+
+# ── Code Execution ────────────────────────────────────────────────────────────
+# NOTE: e2b-code-interpreter v2.x has new Sandbox.create() API
+e2b-code-interpreter==2.7.0
+
+# ── Eval ──────────────────────────────────────────────────────────────────────
+deepeval==2.7.6
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.4.0
+pytest-asyncio==0.25.3
+httpx==0.28.1
+
+# ── Linting / Type Checking ───────────────────────────────────────────────────
+ruff==0.11.12
+mypy==1.16.0
