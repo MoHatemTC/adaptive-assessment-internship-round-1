@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from sqlalchemy import DateTime, func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlmodel import Field, SQLModel
 
 # VERIFY: SQLModel's async session lives at sqlmodel.ext.asyncio.session on
@@ -61,6 +62,21 @@ async_session = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+
+class Base(DeclarativeBase):
+    """Declarative base for SQLAlchemy 2.0 ``Mapped[...]``-style models.
+
+    Feature models may use either ORM style and import everything from here:
+
+    * **SQLModel style** — ``class Foo(SQLModel, table=True)`` with ``Field()``.
+    * **SQLAlchemy 2.0 style** — ``class Foo(Base)`` with
+      ``Mapped[...]`` / ``mapped_column()``.
+
+    Both styles share the same async engine and session factory. Models built on
+    this base register their tables in :attr:`Base.metadata`, which Alembic
+    introspects to autogenerate migrations.
+    """
 
 
 class TimestampMixin:
@@ -144,6 +160,9 @@ __all__ = [
     "async_session",
     "SQLModel",
     "Field",
+    "Base",
+    "Mapped",
+    "mapped_column",
     "TimestampMixin",
     "get_db",
     "check_db_connection",
