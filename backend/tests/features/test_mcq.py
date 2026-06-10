@@ -1,29 +1,44 @@
+import asyncio
+from collections.abc import AsyncGenerator
+
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.core.database import SQLModel, async_session, engine
+from app.core.base_tool import BaseTool
+from app.core.database import Base, async_session, engine
+from app.core.deps import get_db
+from app.features.mcq.api import router as mcq_router
 from app.features.mcq.models import MCQOption, MCQQuestion, MCQResponse
 from app.features.mcq.service import (
-    build_sample_question,
     build_submit_response,
+    create_question,
+    get_question,
     grade_answer,
 )
-from app.features.mcq.tool import (
-    generate_mcq_for_agent_async,
-    get_mcq_tools,
-)
+from app.features.mcq.tool import MCQTool
+
+SAMPLE_OPTIONS = [
+    {"label": "2", "text": "2"},
+    {"label": "3", "text": "3"},
+    {"label": "5", "text": "5"},
+    {"label": "23", "text": "23"},
+]
 
 
-async def reset_mcq_tables():
+async def reset_mcq_tables() -> None:
     """
     Create MCQ tables if needed and clean MCQ data before each database test.
 
-    engine.dispose() is used to avoid Windows asyncpg event-loop reuse issues
-    between pytest async tests.
+    Tables are registered on the SQLAlchemy 2.0 ``Base`` metadata now that the
+    models use the declarative ``Mapped`` style. ``engine.dispose()`` avoids
+    Windows asyncpg event-loop reuse issues between pytest async tests.
     """
     async with engine.begin() as connection:
-        await connection.run_sync(SQLModel.metadata.create_all)
+        await connection.run_sync(Base.metadata.create_all)
 
     async with async_session() as db:
         await db.exec(delete(MCQResponse))
@@ -35,7 +50,7 @@ async def reset_mcq_tables():
 
 
 @pytest.fixture
-async def db_session():
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
     await reset_mcq_tables()
 
     async with async_session() as db:
@@ -45,6 +60,19 @@ async def db_session():
             await db.rollback()
             await db.close()
             await engine.dispose()
+
+
+async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Test replacement for ``get_db`` that commits like the real dependency."""
+    async with async_session() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 
 
 def test_grade_correct_answer():
@@ -79,26 +107,39 @@ def test_grade_answer_ignores_spaces_and_case():
 
 @pytest.mark.asyncio
 async def test_build_submit_response(db_session):
+    question_in = await create_question(
+        db=db_session,
+        question_text="What is the output of print(2 + 3)?",
+        correct_option="5",
+        options=SAMPLE_OPTIONS,
+    )
+
     result = await build_submit_response(
         db=db_session,
-        question_id=1,
-        correct_option="C",
-        selected_option="C",
+        question_id=question_in["id"],
+        selected_option="5",
+        session_id="session-1",
     )
 
     await db_session.commit()
 
-    assert result["question_id"] == 1
-    assert result["selected_option"] == "C"
+    assert result["question_id"] == question_in["id"]
     assert result["is_correct"] is True
     assert result["score"] == 1
 
 
 @pytest.mark.asyncio
-async def test_build_sample_question_does_not_expose_correct_answer(db_session):
-    question = await build_sample_question(db=db_session)
+async def test_get_question_does_not_expose_correct_answer(db_session):
+    question_in = await create_question(
+        db=db_session,
+        question_text="What is the output of print(2 + 3)?",
+        correct_option="5",
+        options=SAMPLE_OPTIONS,
+    )
 
-    assert question["id"] == 1
+    question = await get_question(db=db_session, question_id=question_in["id"])
+
+    assert question["id"] == question_in["id"]
     assert "question_text" in question
     assert "options" in question
     assert "correct_option" not in question
@@ -107,10 +148,18 @@ async def test_build_sample_question_does_not_expose_correct_answer(db_session):
 
 @pytest.mark.asyncio
 async def test_submit_response_is_persisted_in_postgres(db_session):
+    question_in = await create_question(
+        db=db_session,
+        question_text="What is the output of print(2 + 3)?",
+        correct_option="5",
+        options=SAMPLE_OPTIONS,
+    )
+
     result = await build_submit_response(
         db=db_session,
-        question_id=1,
-        selected_option="C",
+        question_id=question_in["id"],
+        selected_option="5",
+        session_id="session-1",
         learner_id="learner-1",
     )
 
@@ -122,51 +171,63 @@ async def test_submit_response_is_persisted_in_postgres(db_session):
     assert result["is_correct"] is True
     assert result["score"] == 1
     assert len(saved_responses) == 1
-    assert saved_responses[0].question_id == 1
+    assert saved_responses[0].question_id == question_in["id"]
+    assert saved_responses[0].session_id == "session-1"
     assert saved_responses[0].learner_id == "learner-1"
-    assert saved_responses[0].selected_option == "C"
+    assert saved_responses[0].selected_option == "5"
     assert saved_responses[0].is_correct is True
     assert saved_responses[0].score == 1
 
 
-def test_langchain_mcq_tools_are_available():
-    tools = get_mcq_tools()
-    tool_names = [tool.name for tool in tools]
+def test_mcq_tool_conforms_to_base_tool():
+    tool = MCQTool()
 
-    assert "mcq_generate_question" in tool_names
-    assert "mcq_grade_answer" in tool_names
-
-
-@pytest.mark.asyncio
-async def test_generate_mcq_for_agent_contract():
-    await reset_mcq_tables()
-
-    question = await generate_mcq_for_agent_async(
-        topic="Python basics",
-        difficulty="easy",
-        question_count=1,
-    )
-
-    assert question["id"] == 1
-    assert question["difficulty"] == "easy"
-    assert len(question["options"]) == 4
-    assert "correct_option" not in question
-
-    await engine.dispose()
+    assert isinstance(tool, BaseTool)
+    assert tool.tool_name == "mcq_tool"
+    assert tool.tool_description is not None
+    assert tool.build_graph() is not None
 
 
-def test_grade_mcq_for_agent_contract():
-    tools = get_mcq_tools()
-    grade_tool = next(
-        tool for tool in tools if tool.name == "mcq_grade_answer"
-    )
+def test_submit_answer_round_trip():
+    """Create a question over HTTP then submit, asserting no grading leak."""
+    asyncio.run(reset_mcq_tables())
 
-    assert grade_tool.name == "mcq_grade_answer"
-    assert grade_tool.description is not None
-    assert grade_tool.args_schema is not None
+    app = FastAPI()
+    app.include_router(mcq_router)
+    app.dependency_overrides[get_db] = _override_get_db
 
-    fields = grade_tool.args_schema.model_fields
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/mcq/questions",
+            json={
+                "question_text": "What is the output of print(2 + 3)?",
+                "difficulty": "easy",
+                "correct_option": "5",
+                "options": [
+                    {"label": "2", "text": "2"},
+                    {"label": "3", "text": "3"},
+                    {"label": "5", "text": "5"},
+                    {"label": "23", "text": "23"},
+                ],
+            },
+        )
 
-    assert "question_id" in fields
-    assert "selected_option" in fields
-    assert "learner_id" in fields
+        assert create_response.status_code == 200
+        question_id = create_response.json()["id"]
+
+        submit_response = client.post(
+            "/mcq/submit",
+            json={
+                "question_id": question_id,
+                "session_id": "session-1",
+                "selected_option": "5",
+            },
+        )
+
+    assert submit_response.status_code == 200
+
+    body = submit_response.json()
+    assert body["received"] is True
+    assert body["question_id"] == question_id
+    assert "is_correct" not in body
+    assert "score" not in body

@@ -8,15 +8,14 @@ class MCQOption(BaseModel):
     text: str = Field(..., description="Option text shown to the learner")
 
 
-class MCQGenerateRequest(BaseModel):
-    topic: str = Field(default="Python basics", description="Assessment topic")
+class MCQCreateRequest(BaseModel):
+    question_text: str = Field(..., description="Question prompt shown to the learner")
     difficulty: str = Field(default="easy", description="Question difficulty")
-    question_count: int = Field(
-        default=1,
-        ge=1,
-        le=10,
-        description="Number of MCQ questions requested",
+    correct_option: str = Field(
+        ...,
+        description="Identifier of the correct option (stored server-side only)",
     )
+    options: List[MCQOption] = Field(..., description="Selectable answer options")
 
 
 class MCQQuestionResponse(BaseModel):
@@ -28,12 +27,17 @@ class MCQQuestionResponse(BaseModel):
 
 class MCQSubmitRequest(BaseModel):
     question_id: int
+    session_id: str = Field(..., description="Owning assessment session id")
     selected_option: str
     learner_id: Optional[str] = None
 
 
 class MCQSubmitResponse(BaseModel):
+    """Silent acknowledgement that an answer was received.
+
+    Grading is silent: ``is_correct`` and ``score`` are persisted server-side
+    but never returned to the learner.
+    """
+
+    received: bool = True
     question_id: int
-    selected_option: str
-    is_correct: bool
-    score: int
