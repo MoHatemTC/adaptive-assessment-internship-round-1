@@ -27,7 +27,7 @@ def upgrade():
         sa.Column("question_text", sa.Text(), nullable=False),
         sa.Column("correct_option", sa.String(length=10), nullable=False),
         sa.Column("difficulty", sa.String(length=50), nullable=False, server_default="easy"),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
 
     op.create_table(
@@ -42,11 +42,15 @@ def upgrade():
         "mcq_responses",
         sa.Column("id", sa.Integer(), primary_key=True, index=True),
         sa.Column("question_id", sa.Integer(), sa.ForeignKey("mcq_questions.id"), nullable=False),
+        # FK to assessment_sessions.id — constraint added via a later migration
+        # once the sessions feature is merged. Indexed so responses are
+        # queryable per session in the meantime.
+        sa.Column("session_id", sa.String(), nullable=False, index=True),
         sa.Column("learner_id", sa.String(length=255), nullable=True),
         sa.Column("selected_option", sa.String(length=10), nullable=False),
         sa.Column("is_correct", sa.Boolean(), nullable=False),
         sa.Column("score", sa.Integer(), nullable=False),
-        sa.Column("answered_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
 
 
