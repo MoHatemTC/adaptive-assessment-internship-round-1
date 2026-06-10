@@ -1,0 +1,33 @@
+# Keep the build context small and free of host-only / secret files.
+# Mirrors the root .gitignore for the frontend.
+#
+# node_modules MUST be excluded: the Dockerfile runs `npm ci` inside the image,
+# so copying the host's node_modules would bloat the context and can break the
+# build with platform-specific binaries.
+
+# ── Node ──
+node_modules/
+.next/
+out/
+.turbo/
+next-env.d.ts
+npm-debug.log*
+yarn-error.log*
+
+# ── Env (never bake secrets into the image) ──
+.env
+.env.local
+.env.*.local
+
+# ── VCS / tooling ──
+.git
+.gitignore
+.dockerignore
+Dockerfile
+
+# ── OS / IDE ──
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
