@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -179,6 +180,67 @@ def test_voice_tool_conforms_to_base_tool():
     assert tool.build_graph() is not None
 
 
+@pytest.mark.asyncio
+async def test_server_side_time_limit_enforcement(db_session):
+    """A session past its time limit is ended cleanly by the server."""
+    voice_session = await create_voice_session(
+        db=db_session,
+        session_id="session-1",
+        time_limit=1,
+    )
+    await db_session.commit()
+
+    session = await start_voice_session(
+        db=db_session,
+        voice_session_id=voice_session.id,
+    )
+    # Backdate the start so the 1-second limit is already exceeded.
+    session.started_at = datetime.now(timezone.utc) - timedelta(seconds=2)
+    await db_session.flush()
+
+    await end_voice_session(db=db_session, voice_session_id=voice_session.id)
+    await db_session.commit()
+
+    ended = await get_voice_session(
+        db=db_session,
+        voice_session_id=voice_session.id,
+    )
+
+    assert ended.status == "completed"
+    assert ended.ended_at is not None
+
+
+@pytest.mark.asyncio
+async def test_empty_transcript_handling(db_session):
+    """Ending a session with no transcript chunks returns "" without crashing."""
+    voice_session = await create_voice_session(
+        db=db_session,
+        session_id="session-1",
+        time_limit=60,
+    )
+    await db_session.commit()
+    await start_voice_session(db=db_session, voice_session_id=voice_session.id)
+    await db_session.commit()
+
+    final_transcript = await end_voice_session(
+        db=db_session,
+        voice_session_id=voice_session.id,
+    )
+    await db_session.commit()
+
+    ended = await get_voice_session(
+        db=db_session,
+        voice_session_id=voice_session.id,
+    )
+
+    assert final_transcript == ""
+    assert ended.status == "completed"
+
+
+# Kept last: this test drives the app through TestClient via ``asyncio.run``,
+# which opens and closes its own event loop on the module-global engine. Any
+# async DB test running after it would inherit stale pooled connections, so the
+# new async tests above must precede it (mirrors the MCQ reference ordering).
 def test_submit_voice_session_round_trip():
     """Create a voice session over HTTP and assert the response shape."""
     asyncio.run(reset_voice_tables())

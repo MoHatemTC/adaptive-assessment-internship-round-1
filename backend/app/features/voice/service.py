@@ -28,6 +28,11 @@ from app.features.voice.schemas import VoiceTranscriptChunk
 
 _logger = get_logger(__name__)
 
+#: Minimum Deepgram confidence for a chunk to count toward the final transcript.
+#: Chunks below this are still stored (for audit/debugging) but marked
+#: ``is_final=False`` so :func:`end_voice_session` excludes them.
+CONFIDENCE_THRESHOLD: float = 0.6
+
 
 @lru_cache
 def _get_deepgram_client() -> AsyncDeepgramClient:
@@ -204,7 +209,6 @@ async def stream_audio_chunk(
         the persisted transcript delta.
     """
     transcript_text, confidence = await _transcribe_chunk(audio_bytes)
-    is_final = bool(transcript_text)
 
     async with async_session() as db:
         count_result = await db.exec(
@@ -213,6 +217,19 @@ async def stream_audio_chunk(
             .where(VoiceTranscript.voice_session_id == voice_session_id)
         )
         chunk_index = int(count_result.one())
+
+        # Gate chunks by confidence: a missing score or one at/above the
+        # threshold is treated as final; a low score is stored but excluded
+        # from the assembled transcript by marking it non-final.
+        if confidence is None or confidence >= CONFIDENCE_THRESHOLD:
+            is_final = True
+        else:
+            is_final = False
+            _logger.warning(
+                "low_confidence_transcript",
+                chunk_index=chunk_index,
+                confidence=confidence,
+            )
 
         transcript = VoiceTranscript(
             voice_session_id=voice_session_id,
