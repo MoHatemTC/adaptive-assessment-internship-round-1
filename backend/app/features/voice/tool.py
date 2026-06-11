@@ -11,6 +11,7 @@ Nodes that touch the database open their own session via
 FastAPI request lifecycle (driven by the agent / WebSocket layer).
 """
 
+from datetime import datetime, timezone
 from typing import Any, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -19,7 +20,11 @@ from langgraph.graph.state import CompiledStateGraph
 from app.core.base_tool import BaseTool
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.features.voice.service import end_voice_session, start_voice_session
+from app.features.voice.service import (
+    end_voice_session,
+    get_voice_session,
+    start_voice_session,
+)
 
 _logger = get_logger(__name__)
 
@@ -118,25 +123,37 @@ class VoiceTool(BaseTool):
         }
 
     async def _check_time_node(self, state: VoiceState) -> dict[str, Any]:
-        """Evaluate elapsed time against the limit (routing decided downstream).
+        """Compute elapsed interview time from the session's ``started_at``.
 
-        This node performs no state mutation itself; the conditional edge
-        :meth:`_route_after_check_time` reads ``elapsed_seconds`` and
-        ``time_limit`` to choose the next step.
+        Derives ``elapsed_seconds`` authoritatively from the database timestamp
+        rather than trusting an injected value, so the conditional edge
+        :meth:`_route_after_check_time` routes to ``end_interview`` based on real
+        wall-clock progress against ``time_limit``. Opens its own database
+        session because the graph runs outside the FastAPI request lifecycle.
 
         Args:
-            state: Incoming graph state.
+            state: Incoming graph state carrying ``voice_session_id``.
 
         Returns:
-            An empty state update.
+            A state update with the freshly computed ``elapsed_seconds``.
         """
+        voice_session_id = state["voice_session_id"]
+        async with async_session() as db:
+            session = await get_voice_session(db, voice_session_id)
+            if session.started_at is not None:
+                elapsed = int(
+                    (datetime.now(timezone.utc) - session.started_at).total_seconds()
+                )
+            else:
+                elapsed = 0
+
         _logger.info(
             "voice_interview_time_checked",
-            voice_session_id=state["voice_session_id"],
-            elapsed_seconds=state.get("elapsed_seconds", 0),
+            voice_session_id=voice_session_id,
+            elapsed_seconds=elapsed,
             time_limit=state["time_limit"],
         )
-        return {}
+        return {"elapsed_seconds": elapsed}
 
     def _route_after_check_time(self, state: VoiceState) -> str:
         """Route to ``end_interview`` when the time limit is reached, else stop.
