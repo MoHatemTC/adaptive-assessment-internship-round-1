@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy import delete
 from sqlmodel import select
+from types import SimpleNamespace
 
 from app.core.database import SQLModel, async_session, engine
 from app.features.diagram.models import Diagram
@@ -15,9 +16,10 @@ service = DiagramService()
 
 async def reset_diagram_tables():
     """
-    Create diagram tables if needed and clean diagram data before each database test.
+    Rebuild diagram tables from model metadata before each database test.
     """
     async with engine.begin() as connection:
+        await connection.run_sync(SQLModel.metadata.drop_all)
         await connection.run_sync(SQLModel.metadata.create_all)
 
     async with async_session() as db:
@@ -41,10 +43,20 @@ async def db_session():
 
 
 @pytest.mark.asyncio
-async def test_diagram_creation_and_persistence(db_session):
+async def test_diagram_creation_and_persistence(db_session, monkeypatch):
     """
     Test that calling create_diagram generates a record and stores it in the database.
     """
+    def fake_image_generation(prompt: str, model: str, **kwargs):
+        return SimpleNamespace(
+            data=[SimpleNamespace(url="https://example.com/diagram.png")]
+        )
+
+    monkeypatch.setattr(
+        "app.features.diagram.service.litellm.image_generation",
+        fake_image_generation,
+    )
+
     prompt_text = "Draw a simple flowchart showing client connecting to API."
     diagram = await service.create_diagram(
         db=db_session,
@@ -56,8 +68,7 @@ async def test_diagram_creation_and_persistence(db_session):
     assert diagram.id is not None
     assert diagram.prompt == prompt_text
     assert diagram.status == "completed"
-    assert diagram.image_url is not None
-    assert diagram.image_url.startswith("https://mermaid.ink/svg/")
+    assert diagram.image_url == "https://example.com/diagram.png"
 
     saved_result = await db_session.exec(select(Diagram).where(Diagram.id == diagram.id))
     saved_diagram = saved_result.first()
@@ -92,7 +103,7 @@ async def test_diagram_retrieval_and_listing(db_session):
 
 
 @pytest.mark.asyncio
-async def test_diagram_agent_tool_contract():
+async def test_diagram_agent_tool_contract(monkeypatch):
     """
     Test that the LangChain tool exposes correct structure and contract.
     """
@@ -110,6 +121,16 @@ async def test_diagram_agent_tool_contract():
     assert "prompt" in fields
     assert "user_id" in fields
 
+    def fake_image_generation(prompt: str, model: str, **kwargs):
+        return SimpleNamespace(
+            data=[SimpleNamespace(url="https://example.com/diagram-tool.png")]
+        )
+
+    monkeypatch.setattr(
+        "app.features.diagram.service.litellm.image_generation",
+        fake_image_generation,
+    )
+
     result = await generate_diagram_for_agent_async(
         prompt="Three-tier web application architecture",
         user_id=None,
@@ -117,6 +138,6 @@ async def test_diagram_agent_tool_contract():
     assert result["id"] is not None
     assert result["prompt"] == "Three-tier web application architecture"
     assert result["status"] == "completed"
-    assert result["image_url"].startswith("https://mermaid.ink/svg/")
+    assert result["image_url"] == "https://example.com/diagram-tool.png"
 
     await engine.dispose()

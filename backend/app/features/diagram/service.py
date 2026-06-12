@@ -1,16 +1,76 @@
 import base64
-import json
+import inspect
 import uuid
 from typing import Optional
-from langchain_core.messages import HumanMessage, SystemMessage
+
+import litellm
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from app.config import get_settings
 
-from app.core.llm import get_llm
 from app.core.logging import get_logger
 from app.features.diagram.models import Diagram
 
 _logger = get_logger(__name__)
+
+def _resolve_model_name(model: Optional[str]) -> str:
+    """
+    Resolve a model override, falling back to the configured default model.
+    """
+    candidate = (model or "").strip()
+    if candidate:
+        return candidate
+    return get_settings().LITELLM_MODEL
+
+
+def _render_image_fallback(prompt: str) -> str:
+    """Return a lightweight fallback image URL when generation fails."""
+    fallback_svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='1024' height='1024'>"
+        "<rect width='100%' height='100%' fill='#2d3748'/>"
+        "<text x='50%' y='48%' text-anchor='middle' fill='#e2e8f0' font-family='Arial,Helvetica,sans-serif' font-size='48'>"
+        "Diagram unavailable</text>"
+        "<text x='50%' y='58%' text-anchor='middle' fill='#cbd5e1' font-family='Arial,Helvetica,sans-serif' font-size='32'>"
+        "Please try again later</text>"
+        "</svg>"
+    )
+    return "data:image/svg+xml;base64," + base64.b64encode(
+        fallback_svg.encode("utf-8")
+    ).decode("ascii")
+
+
+def _get_image_url_from_response(response: object) -> Optional[str]:
+    if getattr(response, "data", None):
+        first_item = response.data[0]
+        if getattr(first_item, "url", None):
+            return first_item.url
+        if getattr(first_item, "b64_json", None):
+            return f"data:image/png;base64,{first_item.b64_json}"
+
+    if getattr(response, "url", None):
+        return response.url
+
+    return None
+
+
+async def _generate_ai_image_url(prompt: str, model: str) -> str:
+    settings = get_settings()
+    response = litellm.image_generation(
+        prompt=prompt,
+        model=model,
+        response_format="url",
+        size="1024x1024",
+        api_key=settings.LITELLM_API_KEY.get_secret_value(),
+        api_base=settings.LITELLM_BASE_URL or None,
+    )
+
+    if inspect.isawaitable(response):
+        response = await response  # type: ignore
+
+    image_url = _get_image_url_from_response(response)
+    if not image_url:
+        raise ValueError("Image generation returned no URL")
+    return image_url
 
 
 class DiagramService:
@@ -19,75 +79,31 @@ class DiagramService:
         db: AsyncSession,
         prompt: str,
         user_id: Optional[uuid.UUID] = None,
+        model: Optional[str] = None,
     ) -> Diagram:
         """
-        Create a diagram record, trigger LLM generation for Mermaid code,
-        encode it to a mermaid.ink URL, persist, and return.
+        Create a diagram record, request an AI-generated image, persist it,
+        and return the diagram metadata.
         """
-        # 1. Create a pending diagram record
+        # 1. Resolve model and create a pending diagram record
+        resolved_model = _resolve_model_name(model)
         diagram = Diagram(
             prompt=prompt,
             user_id=user_id,
+            model_name=resolved_model,
             status="pending",
         )
         db.add(diagram)
         await db.flush()
 
-        # 2. Generate Mermaid code using LiteLLM
-        system_prompt = (
-            "You are an expert software architect and system designer. "
-            "Generate a syntactically correct, beautiful Mermaid.js diagram representing the system, architecture, or flow requested by the user.\n"
-            "Guidelines:\n"
-            "1. Return ONLY the raw Mermaid code block.\n"
-            "2. Do NOT wrap it in markdown code blocks or code fences (e.g. do NOT include ```mermaid or ```).\n"
-            "3. Do NOT include any explanations, warnings, or preamble.\n"
-            "4. Use dark-friendly styles if applicable, but keep standard syntax.\n"
-            "5. Start directly with the diagram type like: graph TD, sequenceDiagram, classDiagram, stateDiagram-v2, etc."
-        )
-
-        mermaid_code = ""
+        # 2. Generate an image using LiteLLM
         try:
-            llm = get_llm()
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=prompt),
-            ]
-            response = await llm.ainvoke(messages)
-            mermaid_code = response.content.strip()
-
-            # Clean up the output in case LLM ignored rules and wrapped in code blocks
-            if mermaid_code.startswith("```"):
-                lines = mermaid_code.splitlines()
-                # Remove starting fence line
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                # Remove ending fence line
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                mermaid_code = "\n".join(lines).strip()
-
-        except Exception as exc:
-            _logger.error("diagram_llm_generation_failed", error=str(exc))
-            # Graceful fallback to a simple diagram in case of failure
-            mermaid_code = (
-                "graph TD\n"
-                "  Start[Start Assessment] --> Error[LLM Generation Failed]\n"
-                f"  Error --> Prompt[Prompt: {prompt[:30]}...]"
-            )
-
-        # 3. Base64-encode code for mermaid.ink
-        try:
-            state = {
-                "code": mermaid_code,
-                "mermaid": {"theme": "dark"},
-            }
-            json_bytes = json.dumps(state).encode("utf-8")
-            base64_str = base64.b64encode(json_bytes).decode("utf-8")
-            image_url = f"https://mermaid.ink/svg/{base64_str}"
+            image_url = await _generate_ai_image_url(prompt, resolved_model)
             diagram.image_url = image_url
             diagram.status = "completed"
         except Exception as exc:
-            _logger.error("diagram_base64_encoding_failed", error=str(exc))
+            _logger.error("diagram_image_generation_failed", error=str(exc))
+            diagram.image_url = _render_image_fallback(prompt)
             diagram.status = "failed"
 
         db.add(diagram)

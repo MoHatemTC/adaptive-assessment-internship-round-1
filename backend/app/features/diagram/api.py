@@ -30,6 +30,7 @@ async def create_diagram(
         db=db,
         prompt=payload.prompt,
         user_id=payload.user_id,
+        model=payload.model,
     )
 
 

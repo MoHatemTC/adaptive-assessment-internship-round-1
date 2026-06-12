@@ -20,11 +20,16 @@ class GenerateDiagramToolInput(BaseModel):
         default=None,
         description="Optional learner ID string (must be a valid UUID format if provided).",
     )
+    model: Optional[str] = Field(
+        default=None,
+        description="Optional LLM model name to use for this diagram generation request.",
+    )
 
 
 async def generate_diagram_for_agent_async(
     prompt: str,
     user_id: Optional[str] = None,
+    model: Optional[str] = None,
 ):
     """
     Async LangChain-compatible diagram generation function.
@@ -43,11 +48,13 @@ async def generate_diagram_for_agent_async(
             db=db,
             prompt=prompt,
             user_id=uid,
+            model=model,
         )
         await db.commit()
         return {
             "id": str(diagram.id),
             "prompt": diagram.prompt,
+            "model_name": diagram.model_name,
             "image_url": diagram.image_url,
             "status": diagram.status,
         }
@@ -56,6 +63,7 @@ async def generate_diagram_for_agent_async(
 def generate_diagram_for_agent(
     prompt: str,
     user_id: Optional[str] = None,
+    model: Optional[str] = None,
 ):
     """
     Sync wrapper for environments running LangChain tools synchronously.
@@ -64,6 +72,7 @@ def generate_diagram_for_agent(
         generate_diagram_for_agent_async(
             prompt=prompt,
             user_id=user_id,
+            model=model,
         )
     )
 
@@ -72,7 +81,7 @@ generate_diagram_tool = StructuredTool.from_function(
     name="diagram_generate_visualization",
     description=(
         "Generate a visual diagram (e.g. system architecture, sequence diagram, database schema) "
-        "based on a textual prompt to present to the learner."
+        "based on a textual prompt to present to the learner. Supports optional model override."
     ),
     func=generate_diagram_for_agent,
     coroutine=generate_diagram_for_agent_async,
@@ -86,5 +95,12 @@ def get_diagram_tools() -> List[StructuredTool]:
     """
     return [generate_diagram_tool]
 
+def get_diagram_multimodel_tools() -> List[StructuredTool]:
+    """
+    Backward-compatible multimodel alias for diagram tool registration.
+    """
+    return get_diagram_tools()
+
 
 DIAGRAM_TOOLS = get_diagram_tools()
+DIAGRAM_MULTIMODEL_TOOLS = get_diagram_multimodel_tools()
