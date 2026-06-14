@@ -1,0 +1,11 @@
+{
+  "title": "Two Sum",
+  "description": "Return indices of two numbers that add up to target.",
+  "starter_code": "def solution(nums, target):\n    pass",
+  "test_cases": [
+    {"input": "print(*solution([2,7,11,15], 9))", "expected_output": "0 1", "is_hidden": false, "weight": 1.0},
+    {"input": "print(*solution([3,2,4], 6))", "expected_output": "1 2", "is_hidden": false, "weight": 1.0},
+    {"input": "print(*solution([3,3], 6))", "expected_output": "0 1", "is_hidden": true, "weight": 1.5}
+  ],
+  "correct_solution": "def solution(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return seen[target - n], i\n        seen[n] = i\n"
+}

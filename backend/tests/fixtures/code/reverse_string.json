@@ -1,0 +1,13 @@
+{
+  "title": "Reverse String",
+  "description": "Write a function `solution(s: str) -> str` that returns the string reversed.",
+  "starter_code": "def solution(s: str) -> str:\n    # your code here\n    pass",
+  "test_cases": [
+    {"input": "print(solution('hello'))", "expected_output": "olleh", "is_hidden": false, "weight": 1.0},
+    {"input": "print(solution('abc'))", "expected_output": "cba", "is_hidden": false, "weight": 1.0},
+    {"input": "print(solution(''))", "expected_output": "", "is_hidden": true, "weight": 1.0},
+    {"input": "print(solution('a'))", "expected_output": "a", "is_hidden": true, "weight": 1.0}
+  ],
+  "correct_solution": "def solution(s: str) -> str:\n    return s[::-1]",
+  "wrong_solution": "def solution(s: str) -> str:\n    return s"
+}

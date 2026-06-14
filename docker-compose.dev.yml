@@ -4,11 +4,27 @@ version: "3.9"
 services:
   backend:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:password@db:5432/masaar_test
+      SESSION_CHANNEL_BACKEND: redis
     volumes:
       - ./backend:/app
+      - ./shared:/app/shared
+
+  worker:
+    environment:
+      SESSION_CHANNEL_BACKEND: redis
+    volumes:
+      - ./backend:/app
+      - ./shared:/app/shared
 
   frontend:
     command: npm run dev
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
     volumes:
       - ./frontend:/app
       - /app/node_modules
+      # Keep Next build cache in-container (avoids root-owned .next on the host)
+      - /app/.next

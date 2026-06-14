@@ -172,3 +172,21 @@ Copy `.env.example` to `.env` and fill in values. Never commit a real `.env` fil
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow, branch rules, and PR checklist.
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [.cursor/MASAAR_CURSOR_FULL_PROJECT.md](./.cursor/MASAAR_CURSOR_FULL_PROJECT.md) | Master product spec and LangGraph design |
+| [docs/architecture.md](./docs/architecture.md) | One-page architecture overview |
+| [docs/system-architecture.md](./docs/system-architecture.md) | Detailed runtime diagrams (target + as-built) |
+| [docs/database-schema.md](./docs/database-schema.md) | Target PostgreSQL DDL and migration appendix |
+| [docs/database-schema-readme.md](./docs/database-schema-readme.md) | Full suggested schema (coding-tool + system + auth) for leads |
+| [docs/database-schema-coding-tool.md](./docs/database-schema-coding-tool.md) | Coding-tool + users + orchestration only |
+| [docs/coding-tool-tables-reference.md](./docs/coding-tool-tables-reference.md) | Coding-tool tables: columns, types, and sample data |
+| [docs/feature-contracts.md](./docs/feature-contracts.md) | Interface requirements per feature slice |
+| [docs/cursor-rules.md](./docs/cursor-rules.md) | Cursor / AI implementation rules |
+| [docs/api-reference.md](./docs/api-reference.md) | Route index + link to OpenAPI |
+| [docs/deployment.md](./docs/deployment.md) | Docker, nginx, WebSocket proxy |

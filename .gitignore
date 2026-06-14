@@ -63,3 +63,8 @@ prd.md
 # -- Cursor files --
 Cursor.md
 .cursor/
+
+# -- graphify files --
+graphify.md
+.graphify/
+graphify-out/

@@ -13,3 +13,7 @@ reportMissingModuleSource = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = [".", ".."]
+markers = [
+    "integration: tests requiring external services (database, E2B, etc.)",
+]
