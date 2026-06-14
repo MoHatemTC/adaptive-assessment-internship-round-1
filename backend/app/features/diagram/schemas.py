@@ -1,32 +1,47 @@
+"""
+schemas.py — Pydantic v2 request/response models for the diagram feature.
+
+DiagramQuestionResponse : what GET /diagram/{id} returns to the frontend
+                          includes the served image URL (not a raw path)
+DiagramAnswerRequest    : body for POST /diagram/{id}/answer
+DiagramAnswerResponse   : what the submit route returns to the agent
+                          — structured grading result, never shown to learner
+"""
+
+import uuid
 from datetime import datetime
 from typing import Optional
-from uuid import UUID
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, Field, HttpUrl
+
+from app.features.diagram.models import Difficulty, SkillDimension
 
 
-class DiagramCreateRequest(BaseModel):
-    prompt: str = Field(
-        ...,
-        description="Text description or instructions for the diagram to generate",
-    )
-    user_id: Optional[UUID] = Field(
-        default=None,
-        description="Optional ID of the learner requesting the diagram",
-    )
-    model: Optional[str] = Field(
-        default=None,
-        description="Optional LLM model override used for diagram generation",
-    )
+class DiagramQuestionResponse(BaseModel):
+    id:         uuid.UUID
+    image_url:  str
+    prompt:     str
+    difficulty: Difficulty
+    dimension:  SkillDimension
+
+    model_config = {"from_attributes": True}
 
 
-class DiagramResponse(BaseModel):
-    id: UUID
-    user_id: Optional[UUID] = None
-    prompt: str
-    model_name: str
-    image_url: Optional[str] = None
-    status: str
-    created_at: datetime
+class DiagramAnswerRequest(BaseModel):
+    session_id:  uuid.UUID = Field(..., description="Blueprint session tracking ID")
+    answer_text: str       = Field(..., min_length=1, max_length=4000)
 
-    class Config:
-        from_attributes = True
+
+class DiagramAnswerResponse(BaseModel):
+    """
+    Structured grading result returned to the agent.
+    Score and feedback are silent — not forwarded to the learner mid-session.
+    The agent uses `score` and `dimension` to select the next question difficulty.
+    """
+    answer_id:        uuid.UUID
+    session_id:       uuid.UUID
+    question_id:      uuid.UUID
+    score:            float
+    dimension:        SkillDimension
+    grading_feedback: str
+    graded_at:        datetime

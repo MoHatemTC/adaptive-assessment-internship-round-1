@@ -1,75 +1,71 @@
+"""
+models.py — SQLAlchemy ORM models for the diagram feature.
+
+DiagramQuestion  : the item delivered to the learner
+                   (image_url, prompt, rubric, difficulty)
+DiagramAnswer    : the learner's text response, persisted per session
+                   queryable by session_id (blueprint requirement)
+
+Difficulty enum matches the blueprint's "difficulty progression" language.
+Five skill dimensions (Thinking/Soft/Work/Digital/Growth) are stored on
+the answer so the aggregation step can map results without a join.
+"""
+
 import uuid
-from typing import Optional
-from app.core.database import Field, SQLModel, TimestampMixin
+import enum
+from datetime import datetime
+
+from sqlalchemy import (
+    Column, String, Text, Float, Integer,
+    ForeignKey, DateTime, Enum as SAEnum,
+)
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+
+from app.core.database import Base
 
 
-class Diagram(SQLModel, TimestampMixin, table=True):
-    """
-    Stores metadata for diagrams generated during learner assessments.
-    """
-
-    __tablename__ = "diagrams"
-
-    id: Optional[uuid.UUID] = Field(
-        default_factory=uuid.uuid4,
-        primary_key=True,
-        nullable=False,
-    )
-    user_id: Optional[uuid.UUID] = Field(default=None, nullable=True)
-    prompt: str = Field(nullable=False)
-    model_name: str = Field(default="azure/FW-Kimi-K2.6", nullable=False, max_length=255)
-    image_url: Optional[str] = Field(default=None, nullable=True)
-    status: str = Field(default="pending", nullable=False)
+class Difficulty(str, enum.Enum):
+    easy   = "easy"
+    medium = "medium"
+    hard   = "hard"
 
 
-class DiagramQuestion(SQLModel, TimestampMixin, table=True):
-    """
-    Stores diagram question metadata and expected answer information.
-    """
+class SkillDimension(str, enum.Enum):
+    """Five dimensions from the project spec."""
+    thinking   = "thinking"
+    soft       = "soft"
+    work       = "work"
+    digital_ai = "digital_ai"
+    growth     = "growth"
 
+
+class DiagramQuestion(Base):
     __tablename__ = "diagram_questions"
 
-    id: Optional[uuid.UUID] = Field(
-        default_factory=uuid.uuid4,
-        primary_key=True,
-        nullable=False,
-    )
-    prompt_text: str = Field(nullable=False)
-    difficulty: str = Field(default="easy", nullable=False, max_length=50)
-    correct_answer: str = Field(nullable=False)
+    id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    image_url  = Column(String, nullable=False)
+    prompt     = Column(Text, nullable=False)
+    rubric     = Column(Text, nullable=False)
+    difficulty = Column(SAEnum(Difficulty), nullable=False)
+    dimension  = Column(SAEnum(SkillDimension), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    answers    = relationship("DiagramAnswer", back_populates="question")
 
 
-class DiagramOption(SQLModel, table=True):
-    """
-    Stores selectable diagram answer options for a diagram question.
-    """
+class DiagramAnswer(Base):
+    __tablename__ = "diagram_answers"
 
-    __tablename__ = "diagram_options"
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
+    question_id = Column(UUID(as_uuid=True), ForeignKey("diagram_questions.id"), nullable=False)
+    answer_text = Column(Text, nullable=False)
 
-    id: Optional[uuid.UUID] = Field(
-        default_factory=uuid.uuid4,
-        primary_key=True,
-        nullable=False,
-    )
-    question_id: uuid.UUID = Field(foreign_key="diagram_questions.id", nullable=False)
-    label: str = Field(nullable=False)
-    text: str = Field(nullable=False)
+    score           = Column(Float, nullable=True)
+    grading_feedback = Column(Text, nullable=True)
+    graded_at       = Column(DateTime, nullable=True)
 
+    submitted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-class DiagramResponse(SQLModel, TimestampMixin, table=True):
-    """
-    Stores learner responses for diagram questions and the computed score.
-    """
-
-    __tablename__ = "diagram_responses"
-
-    id: Optional[uuid.UUID] = Field(
-        default_factory=uuid.uuid4,
-        primary_key=True,
-        nullable=False,
-    )
-    question_id: uuid.UUID = Field(foreign_key="diagram_questions.id", nullable=False)
-    learner_id: Optional[str] = Field(default=None)
-    selected_option: str = Field(nullable=False)
-    is_correct: bool = Field(nullable=False)
-    score: int = Field(default=0, nullable=False)
+    question = relationship("DiagramQuestion", back_populates="answers")

@@ -1,143 +1,132 @@
-import pytest
-from sqlalchemy import delete
-from sqlmodel import select
-from types import SimpleNamespace
+"""
+test_diagram.py
+Three groups:
+  1. Image validation  — bad MIME, oversized, valid JPEG
+  2. API round-trip    — GET shape/404, POST persists + returns grading
+  3. Vision format     — image arrives as content block, not text
+"""
 
-from app.core.database import SQLModel, async_session, engine
-from app.features.diagram.models import Diagram
-from app.features.diagram.service import DiagramService
-from app.features.diagram.tool import (
-    generate_diagram_for_agent_async,
-    get_diagram_tools,
+import base64
+import uuid
+import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import app
+from app.features.diagram.models import Difficulty, DiagramAnswer, DiagramQuestion, SkillDimension
+from app.features.diagram.service import (
+    MAX_IMAGE_BYTES,
+    _build_vision_message,
+    _fetch_and_validate_image,
 )
 
-service = DiagramService()
+client = TestClient(app)
+
+Q_ID = uuid.uuid4()
+S_ID = uuid.uuid4()
 
 
-async def reset_diagram_tables():
-    """
-    Rebuild diagram tables from model metadata before each database test.
-    """
-    async with engine.begin() as connection:
-        await connection.run_sync(SQLModel.metadata.drop_all)
-        await connection.run_sync(SQLModel.metadata.create_all)
-
-    async with async_session() as db:
-        await db.exec(delete(Diagram))
-        await db.commit()
-
-    await engine.dispose()
+def _fake_question():
+    return DiagramQuestion(
+        id=Q_ID,
+        image_url="https://cdn.example.com/q1.jpg",
+        prompt="Label the network diagram.",
+        rubric="1 point per correct label.",
+        difficulty=Difficulty.medium,
+        dimension=SkillDimension.digital_ai,
+    )
 
 
-@pytest.fixture
-async def db_session():
-    await reset_diagram_tables()
+def _fake_answer():
+    return DiagramAnswer(
+        id=uuid.uuid4(),
+        session_id=S_ID,
+        question_id=Q_ID,
+        answer_text="Router in centre, three switches.",
+        score=0.8,
+        grading_feedback="Correct router; missed one switch.",
+        graded_at=datetime.datetime.utcnow(),
+    )
 
-    async with async_session() as db:
-        try:
-            yield db
-        finally:
-            await db.rollback()
-            await db.close()
-            await engine.dispose()
+
+def _mock_http(content_type: str, content: bytes):
+    r = MagicMock()
+    r.headers = {"content-type": content_type}
+    r.content = content
+    r.raise_for_status = MagicMock()
+    return r
 
 
 @pytest.mark.asyncio
-async def test_diagram_creation_and_persistence(db_session, monkeypatch):
-    """
-    Test that calling create_diagram generates a record and stores it in the database.
-    """
-    def fake_image_generation(prompt: str, model: str, **kwargs):
-        return SimpleNamespace(
-            data=[SimpleNamespace(url="https://example.com/diagram.png")]
-        )
-
-    monkeypatch.setattr(
-        "app.features.diagram.service.litellm.image_generation",
-        fake_image_generation,
-    )
-
-    prompt_text = "Draw a simple flowchart showing client connecting to API."
-    diagram = await service.create_diagram(
-        db=db_session,
-        prompt=prompt_text,
-        user_id=None,
-    )
-    await db_session.commit()
-
-    assert diagram.id is not None
-    assert diagram.prompt == prompt_text
-    assert diagram.status == "completed"
-    assert diagram.image_url == "https://example.com/diagram.png"
-
-    saved_result = await db_session.exec(select(Diagram).where(Diagram.id == diagram.id))
-    saved_diagram = saved_result.first()
-
-    assert saved_diagram is not None
-    assert saved_diagram.prompt == prompt_text
-    assert saved_diagram.status == "completed"
-    assert saved_diagram.image_url == diagram.image_url
+async def test_rejects_bad_mime():
+    with patch("httpx.AsyncClient.get", return_value=_mock_http("application/pdf", b"%PDF")):
+        with pytest.raises(ValueError, match="Unsupported image type"):
+            await _fetch_and_validate_image("https://example.com/file.pdf")
 
 
 @pytest.mark.asyncio
-async def test_diagram_retrieval_and_listing(db_session):
-    """
-    Test diagram retrieval by ID and listing by user ID.
-    """
-    import uuid
-
-    user_id = uuid.uuid4()
-    prompt_text = "Database schema architecture"
-
-    d1 = await service.create_diagram(db=db_session, prompt=prompt_text, user_id=user_id)
-    await db_session.commit()
-
-    retrieved = await service.get_diagram(db=db_session, diagram_id=d1.id)
-    assert retrieved is not None
-    assert retrieved.prompt == prompt_text
-    assert retrieved.user_id == user_id
-
-    user_diagrams = await service.list_user_diagrams(db=db_session, user_id=user_id)
-    assert len(user_diagrams) == 1
-    assert user_diagrams[0].id == d1.id
+async def test_rejects_oversized():
+    big = b"\x00" * (MAX_IMAGE_BYTES + 1)
+    with patch("httpx.AsyncClient.get", return_value=_mock_http("image/jpeg", big)):
+        with pytest.raises(ValueError, match="Image too large"):
+            await _fetch_and_validate_image("https://example.com/big.jpg")
 
 
 @pytest.mark.asyncio
-async def test_diagram_agent_tool_contract(monkeypatch):
-    """
-    Test that the LangChain tool exposes correct structure and contract.
-    """
-    await reset_diagram_tables()
+async def test_accepts_valid_jpeg():
+    data = b"\xff\xd8\xff" + b"\x00" * 100
+    with patch("httpx.AsyncClient.get", return_value=_mock_http("image/jpeg", data)):
+        b64, mime = await _fetch_and_validate_image("https://example.com/ok.jpg")
+    assert mime == "image/jpeg"
+    assert base64.b64decode(b64) == data
 
-    tools = get_diagram_tools()
-    assert len(tools) == 1
 
-    tool = tools[0]
-    assert tool.name == "diagram_generate_visualization"
-    assert tool.description is not None
-    assert tool.args_schema is not None
+def test_get_question_shape():
+    with patch("app.features.diagram.service.DiagramService.fetch_question",
+               new_callable=AsyncMock, return_value=_fake_question()):
+        r = client.get(f"/diagram/{Q_ID}")
+    assert r.status_code == 200
+    data = r.json()
+    assert "image_url" in data and "prompt" in data
+    assert "rubric" not in data
 
-    fields = tool.args_schema.model_fields
-    assert "prompt" in fields
-    assert "user_id" in fields
 
-    def fake_image_generation(prompt: str, model: str, **kwargs):
-        return SimpleNamespace(
-            data=[SimpleNamespace(url="https://example.com/diagram-tool.png")]
-        )
+def test_get_question_404():
+    with patch("app.features.diagram.service.DiagramService.fetch_question",
+               new_callable=AsyncMock, return_value=None):
+        r = client.get(f"/diagram/{uuid.uuid4()}")
+    assert r.status_code == 404
 
-    monkeypatch.setattr(
-        "app.features.diagram.service.litellm.image_generation",
-        fake_image_generation,
-    )
 
-    result = await generate_diagram_for_agent_async(
-        prompt="Three-tier web application architecture",
-        user_id=None,
-    )
-    assert result["id"] is not None
-    assert result["prompt"] == "Three-tier web application architecture"
-    assert result["status"] == "completed"
-    assert result["image_url"] == "https://example.com/diagram-tool.png"
+def test_submit_answer_returns_grading():
+    with (
+        patch("app.features.diagram.service.DiagramService.submit_answer",
+              new_callable=AsyncMock, return_value=_fake_answer()),
+        patch("app.features.diagram.service.DiagramService.fetch_question",
+              new_callable=AsyncMock, return_value=_fake_question()),
+    ):
+        r = client.post(f"/diagram/{Q_ID}/answer", json={
+            "session_id": str(S_ID),
+            "answer_text": "Router in centre, three switches.",
+        })
+    assert r.status_code == 201
+    data = r.json()
+    assert 0.0 <= data["score"] <= 1.0
+    assert "dimension" in data
+    assert "grading_feedback" in data
 
-    await engine.dispose()
+
+def test_vision_message_has_image_content_block():
+    b64 = base64.b64encode(b"fake").decode()
+    msgs = _build_vision_message("Describe.", "Rubric.", b64, "image/jpeg")
+    types = [b["type"] for b in msgs[0]["content"]]
+    assert "image_url" in types, "Image must be a vision content block, not text"
+
+
+def test_vision_image_is_data_uri():
+    b64 = base64.b64encode(b"fake").decode()
+    msgs = _build_vision_message("Describe.", "Rubric.", b64, "image/png")
+    img_block = next(b for b in msgs[0]["content"] if b["type"] == "image_url")
+    assert img_block["image_url"]["url"].startswith("data:image/png;base64,")

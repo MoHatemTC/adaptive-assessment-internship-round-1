@@ -1,62 +1,98 @@
-import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel.ext.asyncio.session import AsyncSession
+"""
+api.py — FastAPI router for the diagram feature.
 
-from app.core.deps import get_db
-from app.features.diagram.schemas import DiagramCreateRequest, DiagramResponse
+Routes:
+  GET  /diagram/{question_id}         → DiagramQuestionResponse
+  POST /diagram/{question_id}/answer  → DiagramAnswerResponse
+
+The router is registered in the main app with prefix="/diagram".
+Both routes are used by the agent (tool.py) and the frontend (DiagramView.tsx).
+"""
+
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.features.diagram.schemas import (
+    DiagramQuestionResponse,
+    DiagramAnswerRequest,
+    DiagramAnswerResponse,
+)
 from app.features.diagram.service import DiagramService
 
-router = APIRouter(prefix="/diagram", tags=["Diagram"])
-service = DiagramService()
+router = APIRouter(prefix="/diagram", tags=["diagram"])
+_service = DiagramService()
 
 
-@router.get("/health")
-def diagram_health_check():
-    return {
-        "status": "ready",
-        "feature": "diagram",
-    }
-
-
-@router.post("", response_model=DiagramResponse, status_code=status.HTTP_201_CREATED)
-async def create_diagram(
-    payload: DiagramCreateRequest,
+@router.get(
+    "/{question_id}",
+    response_model=DiagramQuestionResponse,
+    summary="Fetch a diagram question (image URL + prompt + difficulty)",
+)
+async def get_diagram_question(
+    question_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-):
+) -> DiagramQuestionResponse:
     """
-    Generate a diagram dynamically and save it to the database.
-    """
-    return await service.create_diagram(
-        db=db,
-        prompt=payload.prompt,
-        user_id=payload.user_id,
-        model=payload.model,
-    )
+    Returns the diagram item for the learner:
+      - served/signed image_url  (ready for <img> in DiagramView.tsx)
+      - prompt                   (the question to answer)
+      - difficulty + dimension   (used by agent for adaptation)
 
-
-@router.get("/{diagram_id}", response_model=DiagramResponse)
-async def get_diagram(
-    diagram_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-):
+    Rubric is NOT included — it stays server-side for silent grading.
     """
-    Retrieve a diagram by its UUID.
-    """
-    diagram = await service.get_diagram(db=db, diagram_id=diagram_id)
-    if diagram is None:
+    question = await _service.fetch_question(db, question_id)
+    if question is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Diagram not found",
+            detail=f"Diagram question {question_id} not found",
         )
-    return diagram
+    return DiagramQuestionResponse.model_validate(question)
 
 
-@router.get("/user/{user_id}", response_model=list[DiagramResponse])
-async def list_user_diagrams(
-    user_id: uuid.UUID,
+@router.post(
+    "/{question_id}/answer",
+    response_model=DiagramAnswerResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Submit a learner text answer — persisted and graded silently",
+)
+async def submit_diagram_answer(
+    question_id: uuid.UUID,
+    body: DiagramAnswerRequest,
     db: AsyncSession = Depends(get_db),
-):
+) -> DiagramAnswerResponse:
     """
-    List all diagrams created by/for a specific user.
+    Accepts the learner's text answer, persists it as a DiagramAnswer record
+    (queryable by session_id), then grades it silently using the vision model.
+
+    Returns a structured grading result to the agent.
+    Score and feedback are NEVER forwarded to the learner mid-session.
     """
-    return await service.list_user_diagrams(db=db, user_id=user_id)
+    try:
+        answer = await _service.submit_answer(
+            db=db,
+            question_id=question_id,
+            session_id=body.session_id,
+            answer_text=body.answer_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+
+    await db.commit()
+
+    question = await _service.fetch_question(db, question_id)
+
+    return DiagramAnswerResponse(
+        answer_id=answer.id,
+        session_id=answer.session_id,
+        question_id=answer.question_id,
+        score=answer.score,
+        dimension=question.dimension,
+        grading_feedback=answer.grading_feedback,
+        graded_at=answer.graded_at,
+    )

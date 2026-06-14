@@ -1,106 +1,87 @@
-import asyncio
-import uuid
-from typing import List, Optional
+"""
+tool.py — LangChain tool wrapping the diagram feature.
 
-from langchain_core.tools import StructuredTool
+The examiner agent (LangChain/LangGraph) calls this when the blueprint
+says "next question type = diagram". The tool:
+  1. fetches the question (image_url, prompt, rubric, difficulty)
+  2. delivers it to the learner via the chat interface
+  3. receives the learner's text answer
+  4. calls submit_answer → vision grading → returns structured result
+
+The agent uses the returned score + dimension to adapt the next question.
+Image is passed to the model as a vision content block — not as text.
+"""
+
+from typing import Type
+
+from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
+import uuid
 
-from app.core.database import async_session
 from app.features.diagram.service import DiagramService
-
-service = DiagramService()
-
-
-class GenerateDiagramToolInput(BaseModel):
-    prompt: str = Field(
-        ...,
-        description="Text description of the system design, flow chart, sequence diagram, or database schema to visualize.",
-    )
-    user_id: Optional[str] = Field(
-        default=None,
-        description="Optional learner ID string (must be a valid UUID format if provided).",
-    )
-    model: Optional[str] = Field(
-        default=None,
-        description="Optional LLM model name to use for this diagram generation request.",
-    )
+from app.core.database import get_sync_db   # use your project's sync session getter
 
 
-async def generate_diagram_for_agent_async(
-    prompt: str,
-    user_id: Optional[str] = None,
-    model: Optional[str] = None,
-):
+class DiagramToolInput(BaseModel):
+    question_id: str = Field(..., description="UUID of the DiagramQuestion to deliver")
+    session_id:  str = Field(..., description="Blueprint session tracking ID")
+    answer_text: str = Field(..., description="Learner's text answer to the diagram question")
+
+
+class DiagramTool(BaseTool):
     """
-    Async LangChain-compatible diagram generation function.
-
-    Creates its own database session since LangChain tools run outside standard endpoint DI.
+    LangChain tool for the diagram/image reasoning assessment item.
+    Invoked by the examiner agent when the blueprint selects a diagram question.
+    Returns a silent structured grading result — score is never shown to the learner.
     """
-    uid = None
-    if user_id:
-        try:
-            uid = uuid.UUID(user_id)
-        except ValueError:
-            pass
 
-    async with async_session() as db:
-        diagram = await service.create_diagram(
-            db=db,
-            prompt=prompt,
-            user_id=uid,
-            model=model,
+    name:        str = "diagram_tool"
+    description: str = (
+        "Deliver a diagram/image question to the learner and grade their text answer "
+        "silently against the rubric. Input: question_id, session_id, answer_text. "
+        "Output: score (0.0-1.0), dimension, feedback (internal). "
+        "Use when the blueprint calls for a diagram/image reasoning item."
+    )
+    args_schema: Type[BaseModel] = DiagramToolInput
+
+    def _run(
+        self,
+        question_id: str,
+        session_id: str,
+        answer_text: str,
+    ) -> dict:
+        """Sync entry point — delegates to async service via event loop."""
+        import asyncio
+        return asyncio.get_event_loop().run_until_complete(
+            self._arun(question_id, session_id, answer_text)
         )
-        await db.commit()
+
+    async def _arun(
+        self,
+        question_id: str,
+        session_id: str,
+        answer_text: str,
+    ) -> dict:
+        """
+        Async path — preferred when the agent runs in an async context.
+        Image is fetched, validated (type + size), and passed to the
+        vision model as a base64 content block inside submit_answer.
+        """
+        service = DiagramService()
+
+        async with get_sync_db() as db:
+            answer = await service.submit_answer(
+                db=db,
+                question_id=uuid.UUID(question_id),
+                session_id=uuid.UUID(session_id),
+                answer_text=answer_text,
+            )
+            question = await service.fetch_question(db, uuid.UUID(question_id))
+            await db.commit()
+
         return {
-            "id": str(diagram.id),
-            "prompt": diagram.prompt,
-            "model_name": diagram.model_name,
-            "image_url": diagram.image_url,
-            "status": diagram.status,
+            "answer_id":        str(answer.id),
+            "score":            answer.score,
+            "dimension":        question.dimension.value,
+            "grading_feedback": answer.grading_feedback,
         }
-
-
-def generate_diagram_for_agent(
-    prompt: str,
-    user_id: Optional[str] = None,
-    model: Optional[str] = None,
-):
-    """
-    Sync wrapper for environments running LangChain tools synchronously.
-    """
-    return asyncio.run(
-        generate_diagram_for_agent_async(
-            prompt=prompt,
-            user_id=user_id,
-            model=model,
-        )
-    )
-
-
-generate_diagram_tool = StructuredTool.from_function(
-    name="diagram_generate_visualization",
-    description=(
-        "Generate a visual diagram (e.g. system architecture, sequence diagram, database schema) "
-        "based on a textual prompt to present to the learner. Supports optional model override."
-    ),
-    func=generate_diagram_for_agent,
-    coroutine=generate_diagram_for_agent_async,
-    args_schema=GenerateDiagramToolInput,
-)
-
-
-def get_diagram_tools() -> List[StructuredTool]:
-    """
-    Return diagram tools ready for registration in the agent kernel.
-    """
-    return [generate_diagram_tool]
-
-def get_diagram_multimodel_tools() -> List[StructuredTool]:
-    """
-    Backward-compatible multimodel alias for diagram tool registration.
-    """
-    return get_diagram_tools()
-
-
-DIAGRAM_TOOLS = get_diagram_tools()
-DIAGRAM_MULTIMODEL_TOOLS = get_diagram_multimodel_tools()
