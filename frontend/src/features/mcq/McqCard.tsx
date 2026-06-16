@@ -1,0 +1,88 @@
+"use client";
+
+import { useState } from "react";
+
+interface McqOption {
+  id: string;
+  label: string;
+}
+
+interface McqCardProps {
+  questionId: string;
+  questionText: string;
+  options: McqOption[];
+  onSubmit: (questionId: string, selectedOptionId: string) => void;
+  isSubmitting: boolean;
+}
+
+/**
+ * Presentational card that renders a single MCQ question.
+ *
+ * The component is fully controlled by its parent: it tracks only the locally
+ * selected option and delegates submission via `onSubmit`. Grading is silent —
+ * the card never displays correctness or score.
+ */
+export default function McqCard({
+  questionId,
+  questionText,
+  options,
+  onSubmit,
+  isSubmitting,
+}: McqCardProps) {
+  const [selectedOptionId, setSelectedOptionId] = useState<string>("");
+
+  const handleSubmit = () => {
+    if (!selectedOptionId || isSubmitting) {
+      return;
+    }
+    onSubmit(questionId, selectedOptionId);
+  };
+
+  return (
+    <section className="w-full max-w-2xl rounded-[24px] border border-[#D8DDF0] bg-[#FBFBFD] p-6 font-[family-name:var(--font-jakarta)] shadow-sm">
+      <h2 className="mb-6 text-[21px] font-semibold leading-[25px] text-[#1F2430]">
+        {questionText}
+      </h2>
+
+      <div className="space-y-3">
+        {options.map((option) => {
+          const isSelected = selectedOptionId === option.id;
+
+          return (
+            <label
+              key={option.id}
+              className={`flex cursor-pointer items-center gap-3 rounded-[24px] border p-4 transition ${
+                isSelected
+                  ? "border-[#004EFF] bg-[#E6EEFF]"
+                  : "border-[#D8DDF0] bg-[#FBFBFD] hover:border-[#3374FF]"
+              }`}
+            >
+              <input
+                type="radio"
+                name={`mcq-${questionId}`}
+                value={option.id}
+                checked={isSelected}
+                onChange={() => setSelectedOptionId(option.id)}
+                disabled={isSubmitting}
+                className="h-4 w-4 accent-[#004EFF]"
+              />
+
+              <span className="text-sm font-semibold leading-[18px] text-[#343434]">
+                {option.label}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+
+      <button
+        type="button"
+        onClick={handleSubmit}
+        disabled={isSubmitting || !selectedOptionId}
+        className="mt-6 h-[43px] rounded-lg bg-[#004EFF] px-6 py-3 text-sm font-semibold text-[#FBFBFD] transition hover:bg-[#3374FF] disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {isSubmitting ? "Submitting..." : "Submit Answer"}
+      </button>
+    </section>
+  );
+}
