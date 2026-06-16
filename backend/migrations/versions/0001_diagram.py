@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "0001_diagram"
-down_revision = "0001_mcq"
+down_revision = "0005_proctoring"
 branch_labels = None
 depends_on = None
 
@@ -42,8 +42,8 @@ def upgrade() -> None:
         sa.Column("image_url",  sa.String(),  nullable=False),
         sa.Column("prompt",     sa.Text(),    nullable=False),
         sa.Column("rubric",     sa.Text(),    nullable=False),
-        sa.Column("difficulty", sa.Enum("easy", "medium", "hard",   name="difficulty"),    nullable=False),
-        sa.Column("dimension",  sa.Enum("thinking", "soft", "work", "digital_ai", "growth", name="skilldimension"), nullable=False),
+        sa.Column("difficulty", postgresql.ENUM("easy", "medium", "hard", name="difficulty", create_type=False), nullable=False),
+        sa.Column("dimension",  postgresql.ENUM("thinking", "soft", "work", "digital_ai", "growth", name="skilldimension", create_type=False), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
     )
 
