@@ -13,7 +13,7 @@ from app.features.code.schemas import (
     SubmissionRead,
 )
 
-router = APIRouter(route_class=RateLimitedRoute)
+router = APIRouter(prefix="/api/v1/code", tags=["code"], route_class=RateLimitedRoute)
 
 
 @router.post("/challenges", response_model=ChallengeRead, status_code=201)
