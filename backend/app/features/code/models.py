@@ -1,12 +1,14 @@
 """SQLModel entities for the code execution feature."""
 
+from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, Enum as SAEnum, Float, Index, Text
+from sqlalchemy import Column, DateTime, Float, Index, String, Text, func
+from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, Relationship
 
-from app.core.database import SQLModel, TimestampMixin
+from app.core.database import Base, Mapped, SQLModel, TimestampMixin, mapped_column
 
 if TYPE_CHECKING:
     pass
@@ -70,3 +72,40 @@ class CodeSubmission(SQLModel, TimestampMixin, table=True):
     grading_metadata: str | None = Field(default=None, sa_column=Column(Text))
 
     challenge: CodeChallenge | None = Relationship(back_populates="submissions")
+
+
+class CodeMemoryCard(Base):
+    """Coding-tool detail row backing one platform ``memory_cards`` entry.
+
+    Written by Layer 2 (memory card extraction) alongside the shared
+    ``memory_cards`` row. Holds the code-specific evidence (sandbox score and
+    the approach/efficiency feedback) that the platform table does not carry.
+
+    Attributes:
+        id: Surrogate primary key.
+        session_id: Owning assessment session UUID.
+        question_index: Zero-based position in the assessment blueprint.
+        submission_id: PK of the originating ``code_submissions`` row.
+        memory_card_id: PK of the linked platform ``memory_cards`` row.
+        sandbox_score: Weighted E2B test-pass score in ``[0, 1]``.
+        approach_feedback: LLM rubric feedback on solution approach.
+        efficiency_feedback: LLM rubric feedback on solution efficiency.
+        created_at: Server-set timestamp of row insertion.
+    """
+
+    __tablename__ = "code_memory_cards"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    # FK deferred until assessment_sessions table exists
+    question_index: Mapped[int] = mapped_column(nullable=False)
+    submission_id: Mapped[int] = mapped_column(nullable=False)
+    # FK to code_submissions.id (enforced at the DB level by the migration)
+    memory_card_id: Mapped[int] = mapped_column(nullable=False)
+    # FK to platform memory_cards.id (deferred, cross-metadata)
+    sandbox_score: Mapped[float] = mapped_column(Float, nullable=False)
+    approach_feedback: Mapped[str] = mapped_column(Text, nullable=False)
+    efficiency_feedback: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
