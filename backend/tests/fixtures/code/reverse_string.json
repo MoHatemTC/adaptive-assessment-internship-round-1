@@ -1,0 +1,34 @@
+{
+  "title": "Reverse String",
+  "description": "Given an input string, return its reverse.",
+  "starter_code": "def solution(s: str) -> str:\n    # TODO: reverse the string\n    return s\n",
+  "test_cases": [
+    {
+      "input": "hello",
+      "expected_output": "olleh",
+      "is_hidden": true,
+      "weight": 1.0
+    },
+    {
+      "input": "abc",
+      "expected_output": "cba",
+      "is_hidden": true,
+      "weight": 1.0
+    },
+    {
+      "input": "",
+      "expected_output": "",
+      "is_hidden": false,
+      "weight": 1.0
+    },
+    {
+      "input": "a",
+      "expected_output": "a",
+      "is_hidden": false,
+      "weight": 1.0
+    }
+  ],
+  "wrong_solution": "def solution(s: str) -> str:\n    # Incorrect: returns input as-is\n    return s\n",
+  "correct_solution": "def solution(s: str) -> str:\n    return s[::-1]\n"
+}
+
