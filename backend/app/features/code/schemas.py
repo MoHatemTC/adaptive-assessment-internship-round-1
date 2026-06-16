@@ -6,6 +6,13 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from app.features.code.models import SubmissionStatus
+from app.shared.schemas.memory import AdaptiveContract, DifficultyLevel
+
+__all__ = [
+    "AdaptiveContract",
+    "AdaptiveSubmitRequest",
+    "AdaptiveSubmitResponse",
+]
 
 
 class TestCaseCreate(BaseModel):
@@ -105,3 +112,42 @@ class ExecutionOutcome(str, Enum):
     SUCCESS = "success"
     SANDBOX_ERROR = "sandbox_error"
     SANDBOX_UNAVAILABLE = "sandbox_unavailable"
+
+
+class AdaptiveSubmitRequest(BaseModel):
+    """Input to the adaptive submit endpoint — one answered question.
+
+    Attributes:
+        challenge_id: Code challenge being answered.
+        session_id: Platform assessment session UUID.
+        assessment_id: Parent assessment identifier.
+        submitted_code: The learner's submitted source.
+        question_index: Zero-based position in the assessment blueprint.
+        difficulty: Difficulty tier of the answered question.
+    """
+
+    challenge_id: int
+    session_id: str = Field(min_length=1, max_length=64)
+    assessment_id: str = Field(min_length=1, max_length=64)
+    submitted_code: str = Field(min_length=1)
+    question_index: int = Field(ge=0)
+    difficulty: DifficultyLevel
+
+
+class AdaptiveSubmitResponse(BaseModel):
+    """Response from the adaptive submit endpoint.
+
+    Carries only learner-safe data plus the adaptive contract for the next
+    question. Raw ``grade_results`` / ``memory_cards`` are never exposed.
+
+    Attributes:
+        submission_id: PK of the persisted ``code_submissions`` row.
+        passed: Whether the submission cleared the sandbox pass threshold.
+        score: Weighted sandbox score in ``[0, 1]``.
+        contract: The adaptive contract for the next question.
+    """
+
+    submission_id: int
+    passed: bool | None
+    score: float | None
+    contract: AdaptiveContract

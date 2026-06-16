@@ -6,6 +6,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.deps import RateLimitedRoute, get_db
 from app.features.code import service
 from app.features.code.schemas import (
+    AdaptiveSubmitRequest,
+    AdaptiveSubmitResponse,
     ChallengeCreate,
     ChallengeListItem,
     ChallengeRead,
@@ -58,3 +60,12 @@ async def get_submission(
     db: AsyncSession = Depends(get_db),
 ) -> SubmissionRead:
     return await service.get_submission(db, submission_id)
+
+
+@router.post("/adaptive-submit", response_model=AdaptiveSubmitResponse, status_code=201)
+async def adaptive_submit(
+    request: Request,
+    payload: AdaptiveSubmitRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AdaptiveSubmitResponse:
+    return await service.adaptive_submit(db, payload)
