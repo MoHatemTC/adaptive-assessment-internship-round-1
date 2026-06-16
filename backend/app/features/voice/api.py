@@ -7,9 +7,10 @@ the application factory's auto-discovery registers it (with no extra prefix, so
 ``prefix="/voice"`` is the full path).
 
 The streaming endpoint accepts binary audio frames, transcribes each via
-Deepgram, persists it, and echoes a ``transcript_delta`` message back to the
-client. The interview ends on client disconnect or when the session's time
-limit elapses, at which point the final transcript is assembled and saved.
+Azure Whisper through the LiteLLM proxy, persists it, and echoes a
+``transcript_delta`` message back to the client. The interview ends on client
+disconnect or when the session's time limit elapses, at which point the final
+transcript is assembled and saved.
 """
 
 import asyncio

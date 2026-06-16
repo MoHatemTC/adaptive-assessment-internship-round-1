@@ -60,18 +60,19 @@ class VoiceSession(Base):
 class VoiceTranscript(Base):
     """A single real-time transcript chunk belonging to a :class:`VoiceSession`.
 
-    Chunks arrive in order as Deepgram streams interim and final results.
-    ``chunk_index`` preserves ordering, ``is_final`` distinguishes settled text
-    from interim hypotheses, and ``speaker_confidence`` carries Deepgram's
-    confidence score when available.
+    Chunks arrive in order as Azure Whisper (via the LiteLLM proxy) streams
+    interim and final results. ``chunk_index`` preserves ordering, ``is_final``
+    distinguishes settled text from interim hypotheses, and
+    ``speaker_confidence`` carries the transcription confidence score when
+    available.
 
     Attributes:
         id: Surrogate primary key.
         voice_session_id: Foreign key to the owning :class:`VoiceSession`.
         chunk_index: Zero-based ordering index of the chunk within the session.
         transcript_text: The recognized text for this chunk.
-        speaker_confidence: Deepgram confidence score in ``[0.0, 1.0]``, or
-            ``None`` when not reported.
+        speaker_confidence: Transcription confidence score in ``[0.0, 1.0]``,
+            or ``None`` when not reported.
         is_final: Whether this chunk is a finalized transcript (``True``) or an
             interim hypothesis (``False``). Defaults to ``False`` server-side.
         created_at: Server-set timestamp of row insertion.
