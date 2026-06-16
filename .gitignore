@@ -63,3 +63,6 @@ prd.md
 # -- Cursor files --
 Cursor.md
 .cursor/
+
+# ── uv (for local tests) ──────────────────────────────────────────────
+uv.lock
