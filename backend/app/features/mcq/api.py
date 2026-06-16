@@ -1,9 +1,12 @@
 """FastAPI routes for the MCQ feature.
 
-Exposes three endpoints — create a question, fetch a question (without its
-answer), and submit an answer. Submission is silent: the response only
-acknowledges receipt and never reveals correctness or score. The router is
-named ``router`` so the application factory's auto-discovery registers it.
+Exposes endpoints to create a question, fetch a question without its answer,
+submit an answer silently, and run the adaptive MCQ loop.
+
+Submission is silent:
+- correctness is not returned
+- score is not returned
+- correct_option is never exposed to the learner
 """
 
 from typing import Dict
@@ -12,7 +15,10 @@ from fastapi import APIRouter, Depends
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.deps import get_db
+from app.features.mcq.loop import run_mcq_adaptive_loop
 from app.features.mcq.schemas import (
+    MCQAdaptiveSubmitRequest,
+    MCQAdaptiveSubmitResponse,
     MCQCreateRequest,
     MCQQuestionResponse,
     MCQSubmitRequest,
@@ -29,11 +35,7 @@ router = APIRouter(prefix="/mcq", tags=["mcq"])
 
 @router.get("/health")
 def mcq_health_check() -> Dict[str, str]:
-    """Report that the MCQ feature is ready.
-
-    Returns:
-        A small status payload identifying the feature.
-    """
+    """Report that the MCQ feature is ready."""
     return {
         "status": "ready",
         "feature": "mcq",
@@ -45,21 +47,17 @@ async def create_mcq_question(
     payload: MCQCreateRequest,
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, object]:
-    """Create an MCQ question and return it without the correct answer.
-
-    Args:
-        payload: Question text, difficulty, correct option, and options.
-        db: Async database session dependency.
-
-    Returns:
-        The created question serialized without ``correct_option``.
-    """
+    """Create an MCQ question and return it without the correct answer."""
     return await create_question(
         db=db,
         question_text=payload.question_text,
         correct_option=payload.correct_option,
-        options=[{"label": o.label, "text": o.text} for o in payload.options],
+        options=[
+            {"label": option.label, "text": option.text}
+            for option in payload.options
+        ],
         difficulty=payload.difficulty,
+        dimension=payload.dimension,
     )
 
 
@@ -68,18 +66,7 @@ async def get_mcq_question(
     question_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, object]:
-    """Return an MCQ question without exposing the correct answer.
-
-    Args:
-        question_id: Primary key of the question to fetch.
-        db: Async database session dependency.
-
-    Returns:
-        The question serialized without ``correct_option``.
-
-    Raises:
-        HTTPException: 404 if the question does not exist.
-    """
+    """Return an MCQ question without exposing the correct answer."""
     return await get_question(db=db, question_id=question_id)
 
 
@@ -88,26 +75,37 @@ async def submit_mcq_answer(
     payload: MCQSubmitRequest,
     db: AsyncSession = Depends(get_db),
 ) -> MCQSubmitResponse:
-    """Submit, silently grade, and persist an MCQ answer.
-
-    Grading is silent: the response only acknowledges receipt. Correctness and
-    score are persisted server-side but never returned to the learner.
-
-    Args:
-        payload: Question id, session id, selected option, and optional learner.
-        db: Async database session dependency.
-
-    Returns:
-        A silent acknowledgement carrying only ``received`` and ``question_id``.
-
-    Raises:
-        HTTPException: 404 if the question does not exist.
-    """
+    """Submit, silently grade, and persist an MCQ answer."""
     await build_submit_response(
         db=db,
         question_id=payload.question_id,
         selected_option=payload.selected_option,
         session_id=payload.session_id,
-        learner_id=payload.learner_id,
+        question_index=payload.question_index,
     )
+
     return MCQSubmitResponse(received=True, question_id=payload.question_id)
+
+
+@router.post("/adaptive-submit", response_model=MCQAdaptiveSubmitResponse)
+async def adaptive_submit_mcq_answer(
+    payload: MCQAdaptiveSubmitRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MCQAdaptiveSubmitResponse:
+    """Submit an answer and return the next adaptive MCQ."""
+    result = await run_mcq_adaptive_loop(
+        db=db,
+        question_id=payload.question_id,
+        selected_option=payload.selected_option,
+        session_id=payload.session_id,
+        question_index=payload.question_index,
+        learner_profile=payload.learner_profile,
+        admin_config=payload.admin_config,
+    )
+
+    return MCQAdaptiveSubmitResponse(
+        received=result["received"],
+        question_id=result["question_id"],
+        next_plan=result["next_plan"],
+        next_question=result["next_question"],
+    )

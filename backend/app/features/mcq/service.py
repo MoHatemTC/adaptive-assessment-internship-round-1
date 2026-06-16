@@ -1,10 +1,13 @@
-"""MCQ persistence and silent grading logic.
+"""MCQ persistence and silent objective grading logic.
 
-This layer owns question creation/retrieval and objective grading. Grading is
-silent: ``is_correct`` and ``score`` are computed and persisted for the LLM
-judge and admin reporting, but the API layer never returns them to the learner.
-Answers are compared as normalized option identifiers (stripped, lowercased) so
-that case and whitespace differences never cause a false mismatch.
+This service follows the Masaar unified schema:
+
+- mcq_questions stores question content, correct option, difficulty, and dimension.
+- mcq_options stores answer options.
+- mcq_responses stores learner submissions only.
+- mcq_responses does not store scores, correctness, learner_id, or grading output.
+- Objective grading is computed internally and returned to the adaptive loop,
+  while platform grading tables own persisted grading output.
 """
 
 from typing import Any, Dict, List, Optional
@@ -23,26 +26,23 @@ def normalize_option_id(option_id: str) -> str:
     """Normalize an option identifier for comparison.
 
     Args:
-        option_id: Raw option identifier from the question key or the learner.
+        option_id: Raw option identifier from the question key or learner.
 
     Returns:
         The identifier stripped of surrounding whitespace and lowercased.
-
-    Example:
-        ``" B "`` -> ``"b"``
     """
     return option_id.strip().lower()
 
 
 def grade_answer(correct_option: str, selected_option: str) -> Dict[str, Any]:
-    """Grade an MCQ answer objectively by comparing normalized option IDs.
+    """Grade an MCQ answer objectively by comparing normalized option labels.
 
     Args:
-        correct_option: The correct option identifier stored server-side.
-        selected_option: The option identifier the learner submitted.
+        correct_option: Correct option label stored server-side.
+        selected_option: Option label submitted by the learner.
 
     Returns:
-        A dict with ``is_correct`` (bool) and ``score`` (1 if correct else 0).
+        Internal grading result with correctness and binary score.
     """
     is_correct = normalize_option_id(correct_option) == normalize_option_id(
         selected_option
@@ -58,18 +58,7 @@ async def _get_question_or_404(
     db: AsyncSession,
     question_id: int,
 ) -> MCQQuestion:
-    """Fetch a question by id or raise a 404.
-
-    Args:
-        db: Active async database session.
-        question_id: Primary key of the question to fetch.
-
-    Returns:
-        The matching :class:`~app.features.mcq.models.MCQQuestion`.
-
-    Raises:
-        HTTPException: 404 if no question matches ``question_id``.
-    """
+    """Fetch a question by id or raise 404."""
     result = await db.exec(
         select(MCQQuestion).where(MCQQuestion.id == question_id)
     )
@@ -90,28 +79,22 @@ async def create_question(
     question_text: str,
     correct_option: str,
     options: List[Dict[str, str]],
-    difficulty: str = "easy",
+    difficulty: str = "beginner",
+    dimension: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create an MCQ question with its options.
 
-    Args:
-        db: Active async database session.
-        question_text: The prompt shown to the learner.
-        correct_option: Identifier of the correct option (kept server-side).
-        options: Option dicts, each with ``label`` and ``text`` keys.
-        difficulty: Difficulty label. Defaults to ``"easy"``.
-
-    Returns:
-        The created question serialized without the correct answer.
+    The correct option is stored server-side only and is never returned
+    in the learner-facing response.
     """
     question = MCQQuestion(
         question_text=question_text,
         difficulty=difficulty,
         correct_option=correct_option,
+        dimension=dimension,
     )
     db.add(question)
 
-    # Flush so the database assigns question.id before inserting its options.
     await db.flush()
 
     for option in options:
@@ -122,12 +105,14 @@ async def create_question(
                 text=option["text"],
             )
         )
+
     await db.flush()
 
     _logger.info(
         "mcq_question_created",
         question_id=question.id,
         difficulty=difficulty,
+        dimension=dimension,
         option_count=len(options),
     )
 
@@ -135,6 +120,7 @@ async def create_question(
         "id": question.id,
         "question_text": question.question_text,
         "difficulty": question.difficulty,
+        "dimension": question.dimension,
         "options": [
             {"label": option["label"], "text": option["text"]}
             for option in options
@@ -146,18 +132,7 @@ async def get_question(
     db: AsyncSession,
     question_id: int,
 ) -> Dict[str, Any]:
-    """Return a question and its options without exposing the correct answer.
-
-    Args:
-        db: Active async database session.
-        question_id: Primary key of the question to return.
-
-    Returns:
-        The question serialized with its options but no ``correct_option``.
-
-    Raises:
-        HTTPException: 404 if the question does not exist.
-    """
+    """Return a question and its options without exposing correct_option."""
     question = await _get_question_or_404(db, question_id)
 
     options_result = await db.exec(
@@ -171,6 +146,7 @@ async def get_question(
         "id": question.id,
         "question_text": question.question_text,
         "difficulty": question.difficulty,
+        "dimension": question.dimension,
         "options": [
             {"label": option.label, "text": option.text} for option in options
         ],
@@ -181,18 +157,7 @@ async def get_correct_option(
     db: AsyncSession,
     question_id: int,
 ) -> str:
-    """Return the correct option identifier for a question.
-
-    Args:
-        db: Active async database session.
-        question_id: Primary key of the question.
-
-    Returns:
-        The stored correct option identifier.
-
-    Raises:
-        HTTPException: 404 if the question does not exist (no silent fallback).
-    """
+    """Return the server-side correct option label for internal grading."""
     question = await _get_question_or_404(db, question_id)
     return question.correct_option
 
@@ -202,63 +167,52 @@ async def build_submit_response(
     question_id: int,
     selected_option: str,
     session_id: str,
+    question_index: int,
     correct_option: Optional[str] = None,
-    learner_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Silently grade and persist an MCQ response.
 
-    The returned dict includes ``is_correct`` and ``score`` for internal callers
-    (the LLM judge and admin reporting). The API layer must not forward those
-    fields to the learner.
-
-    Args:
-        db: Active async database session.
-        question_id: Primary key of the answered question.
-        selected_option: The option identifier the learner submitted.
-        session_id: Owning assessment session id, stored on the response.
-        correct_option: Optional correct option, looked up when not supplied.
-        learner_id: Optional learner identifier.
-
-    Returns:
-        A dict with ``question_id``, ``is_correct``, and ``score``.
-
-    Raises:
-        HTTPException: 404 if the question does not exist.
+    mcq_responses stores only the learner submission. Correctness and score
+    are computed internally for the adaptive loop, but they are not written
+    to mcq_responses and must never be exposed to the learner.
     """
-    correct = correct_option or await get_correct_option(
-        db=db,
-        question_id=question_id,
-    )
+    question = await _get_question_or_404(db, question_id)
 
-    normalized_selected = normalize_option_id(selected_option)
+    correct = correct_option or question.correct_option
+    selected_option_clean = selected_option.strip()
 
     grading_result = grade_answer(
         correct_option=correct,
-        selected_option=normalized_selected,
+        selected_option=selected_option_clean,
     )
 
     response = MCQResponse(
         question_id=question_id,
         session_id=session_id,
-        learner_id=learner_id,
-        selected_option=normalized_selected,
-        is_correct=grading_result["is_correct"],
-        score=grading_result["score"],
+        question_index=question_index,
+        selected_option=selected_option_clean,
     )
 
     db.add(response)
     await db.flush()
 
-    # Silent grading: log server-side for the judge/reporting, never returned.
     _logger.info(
-        "mcq_answer_graded",
+        "mcq_answer_graded_silently",
+        response_id=response.id,
         question_id=question_id,
         session_id=session_id,
+        question_index=question_index,
         is_correct=grading_result["is_correct"],
     )
 
     return {
+        "response_id": response.id,
         "question_id": response.question_id,
-        "is_correct": response.is_correct,
-        "score": response.score,
+        "session_id": response.session_id,
+        "question_index": response.question_index,
+        "difficulty": question.difficulty,
+        "dimension": question.dimension,
+        "is_correct": grading_result["is_correct"],
+        "score": grading_result["score"],
     }
+

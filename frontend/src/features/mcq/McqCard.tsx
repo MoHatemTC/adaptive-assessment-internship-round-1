@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface McqOption {
-  id: string;
   label: string;
+  text: string;
 }
 
 interface McqCardProps {
@@ -18,9 +18,9 @@ interface McqCardProps {
 /**
  * Presentational card that renders a single MCQ question.
  *
- * The component is fully controlled by its parent: it tracks only the locally
- * selected option and delegates submission via `onSubmit`. Grading is silent —
- * the card never displays correctness or score.
+ * The component is controlled by its parent: it tracks only the locally selected
+ * option and delegates submission via `onSubmit`. Grading is silent — the card
+ * never displays correctness or score.
  */
 export default function McqCard({
   questionId,
@@ -31,10 +31,15 @@ export default function McqCard({
 }: McqCardProps) {
   const [selectedOptionId, setSelectedOptionId] = useState<string>("");
 
+  useEffect(() => {
+    setSelectedOptionId("");
+  }, [questionId]);
+
   const handleSubmit = () => {
     if (!selectedOptionId || isSubmitting) {
       return;
     }
+
     onSubmit(questionId, selectedOptionId);
   };
 
@@ -46,12 +51,12 @@ export default function McqCard({
 
       <div className="space-y-3">
         {options.map((option) => {
-          const isSelected = selectedOptionId === option.id;
+          const isSelected = selectedOptionId === option.label;
 
           return (
             <label
-              key={option.id}
-              className={`flex cursor-pointer items-center gap-3 rounded-[24px] border p-4 transition ${
+              key={option.label}
+              className={`flex cursor-pointer items-start gap-3 rounded-[24px] border p-4 transition ${
                 isSelected
                   ? "border-[#004EFF] bg-[#E6EEFF]"
                   : "border-[#D8DDF0] bg-[#FBFBFD] hover:border-[#3374FF]"
@@ -60,16 +65,22 @@ export default function McqCard({
               <input
                 type="radio"
                 name={`mcq-${questionId}`}
-                value={option.id}
+                value={option.label}
                 checked={isSelected}
-                onChange={() => setSelectedOptionId(option.id)}
+                onChange={() => setSelectedOptionId(option.label)}
                 disabled={isSubmitting}
-                className="h-4 w-4 accent-[#004EFF]"
+                className="mt-1 h-4 w-4 accent-[#004EFF]"
               />
 
-              <span className="text-sm font-semibold leading-[18px] text-[#343434]">
-                {option.label}
-              </span>
+              <div className="flex flex-col gap-1">
+                <span className="text-sm font-semibold leading-[18px] text-[#343434]">
+                  {option.label}
+                </span>
+
+                <span className="text-sm font-medium leading-[20px] text-[#343434]">
+                  {option.text}
+                </span>
+              </div>
             </label>
           );
         })}
