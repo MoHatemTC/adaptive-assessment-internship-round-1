@@ -39,19 +39,66 @@ async def _fetch_diagram_answers(db: AsyncSession, session_id: uuid.UUID) -> lis
 
 
 async def _fetch_mcq_answers(db: AsyncSession, session_id: uuid.UUID) -> list[AnswerRecord]:
-    # TODO: wire up once app.features.mcq.models is available.
-    # Expected shape: MCQAnswer with session_id, dimension, score (0.0-1.0), feedback.
-    return []
+    from app.features.mcq.models import MCQResponse
+
+    result = await db.execute(
+        select(MCQResponse)
+        .options(selectinload(MCQResponse.question))
+        .where(MCQResponse.session_id == session_id)
+        .where(MCQResponse.score.isnot(None))
+    )
+    rows = result.scalars().all()
+    return [
+        AnswerRecord(
+            tool="mcq",
+            dimension=row.question.dimension.value,
+            score=row.score,
+            feedback=row.grading_feedback or "",
+        )
+        for row in rows
+    ]
 
 
 async def _fetch_voice_answers(db: AsyncSession, session_id: uuid.UUID) -> list[AnswerRecord]:
-    # TODO: wire up once app.features.voice.models is available.
-    return []
+    from app.features.voice.models import VoiceTranscript
+
+    result = await db.execute(
+        select(VoiceTranscript)
+        .options(selectinload(VoiceTranscript.question))
+        .where(VoiceTranscript.session_id == session_id)
+        .where(VoiceTranscript.score.isnot(None))
+    )
+    rows = result.scalars().all()
+    return [
+        AnswerRecord(
+            tool="voice",
+            dimension=row.question.dimension.value,
+            score=row.score,
+            feedback=row.grading_feedback or "",
+        )
+        for row in rows
+    ]
 
 
 async def _fetch_code_answers(db: AsyncSession, session_id: uuid.UUID) -> list[AnswerRecord]:
-    # TODO: wire up once app.features.code.models is available.
-    return []
+    from app.features.code.models import CodeSubmission
+
+    result = await db.execute(
+        select(CodeSubmission)
+        .options(selectinload(CodeSubmission.question))
+        .where(CodeSubmission.session_id == session_id)
+        .where(CodeSubmission.score.isnot(None))
+    )
+    rows = result.scalars().all()
+    return [
+        AnswerRecord(
+            tool="code",
+            dimension=row.question.dimension.value,
+            score=row.score,
+            feedback=row.grading_feedback or "",
+        )
+        for row in rows
+    ]
 
 
 async def fetch_all_answers(db: AsyncSession, session_id: uuid.UUID) -> list[AnswerRecord]:
