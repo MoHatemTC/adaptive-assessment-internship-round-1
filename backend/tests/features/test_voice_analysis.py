@@ -241,3 +241,26 @@ def test_difficulty_bounds_respected():
         )
         == "intermediate"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — follow_up_depth is capped by the admin blueprint maximum
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_follow_up_depth_capped_by_blueprint():
+    deep_analysis = {"mastery_level": "high", "recommended_follow_up_depth": "deep"}
+
+    # Blueprint caps depth at "simple" — a recommended "deep" is clamped down.
+    with patch(f"{_ADAPT}.get_llm", side_effect=RuntimeError("LLM unavailable")):
+        _, _, capped = await generate_next_voice_question(
+            deep_analysis, {}, {"max_follow_up_depth": "simple"}, "beginner", 0, ""
+        )
+    assert capped == "simple"
+
+    # Blueprint allows "deep" — the recommended depth is preserved.
+    with patch(f"{_ADAPT}.get_llm", side_effect=RuntimeError("LLM unavailable")):
+        _, _, allowed = await generate_next_voice_question(
+            deep_analysis, {}, {"max_follow_up_depth": "deep"}, "beginner", 0, ""
+        )
+    assert allowed == "deep"

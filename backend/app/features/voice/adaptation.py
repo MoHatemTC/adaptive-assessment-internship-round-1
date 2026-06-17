@@ -117,6 +117,14 @@ async def generate_next_voice_question(
         admin_config,
     )
     follow_up_depth = analysis.get("recommended_follow_up_depth", "simple")
+    # Cap probing depth at the admin blueprint's configured maximum so the
+    # adaptive layer can never probe deeper than the assessment allows.
+    _DEPTH_ORDER = ["simple", "deep"]
+    blueprint_max_depth = admin_config.get("max_follow_up_depth", "deep")
+    if blueprint_max_depth not in _DEPTH_ORDER:
+        blueprint_max_depth = "deep"
+    if _DEPTH_ORDER.index(follow_up_depth) > _DEPTH_ORDER.index(blueprint_max_depth):
+        follow_up_depth = blueprint_max_depth
     weakest_dim = analysis.get("weakest_dimension") or "thinking"
     learner_role = learner_profile.get("role", "software developer")
     learner_level = learner_profile.get("level", "mid")
@@ -160,6 +168,10 @@ async def generate_next_voice_question(
 
     try:
         llm = get_llm()
+        # Generate at temperature 0.7 for varied, non-repetitive questions.
+        if hasattr(llm, "temperature"):
+            llm.temperature = 0.7
+        logger.info("llm_generation_temperature", temperature=0.7)
         response = await llm.ainvoke(
             [SystemMessage(content=system), HumanMessage(content=human)]
         )

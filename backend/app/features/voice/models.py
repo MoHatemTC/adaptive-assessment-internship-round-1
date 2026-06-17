@@ -10,6 +10,7 @@ and never trimmed for the learner's benefit.
 """
 
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
 
@@ -97,4 +98,41 @@ class VoiceTranscript(Base):
     is_final: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class VoiceMemoryCard(Base):
+    """Voice-specific memory card detail.
+
+    Stores the voice-slice fields that extend the platform
+    MemoryCard. Written by the evaluation layer after each
+    clean (non-flagged) voice response. References the base
+    memory_cards row via memory_card_id once that FK is active.
+    """
+
+    __tablename__ = "voice_memory_cards"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    voice_session_id: Mapped[int] = mapped_column(
+        nullable=False, index=True
+    )
+    # FK → voice_sessions.id — deferred until sessions feature merges
+    memory_card_id: Mapped[Optional[int]] = mapped_column(
+        nullable=True
+    )
+    # FK → memory_cards.id — set after run_memory_agent persists base card
+    competency: Mapped[str] = mapped_column(Text, nullable=False)
+    # First 5–7 words of the question, used as skill label
+    rubric_scores_json: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="{}"
+    )
+    # Serialized RubricScores from the LLM grader
+    communication_signals_json: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="{}"
+    )
+    # Serialized CommunicationSignals (clarity, fluency, confidence, structure)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
     )

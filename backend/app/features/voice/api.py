@@ -331,17 +331,18 @@ async def process_voice_session(
     full_output = await run_voice_adaptive_loop(payload)
 
     # Strip every internal grading signal before crossing the API boundary.
-    # The full contract carries memory_summary, focus_dimension, and
-    # cumulative_scores; the learner only ever receives navigation data.
-    public_contract = None
-    if full_output.adaptive_contract is not None:
-        contract = full_output.adaptive_contract
-        public_contract = {
-            "question_index": contract.get("question_index"),
-            "next_question_text": contract.get("next_question_text"),
-            "difficulty": contract.get("difficulty"),
-            "follow_up_depth": contract.get("follow_up_depth"),
-            "stop": contract.get("stop"),
+    # AdaptiveContract.model_dump() carries focus_dimension, memory_summary,
+    # session_id, tool_type, and cumulative_scores — none of which the learner
+    # may see. Only the five navigation fields below are exposed.
+    raw_contract = full_output.adaptive_contract
+    safe_contract: dict | None = None
+    if raw_contract:
+        safe_contract = {
+            "next_question_text": raw_contract.get("next_question_text"),
+            "difficulty": raw_contract.get("difficulty"),
+            "follow_up_depth": raw_contract.get("follow_up_depth"),
+            "stop": raw_contract.get("stop", False),
+            "question_index": raw_contract.get("question_index"),
         }
 
     return VoiceAdaptivePublicResponse(
@@ -349,7 +350,7 @@ async def process_voice_session(
         voice_session_id=full_output.voice_session_id,
         question_index=full_output.question_index,
         flagged=full_output.flagged,
-        adaptive_contract=public_contract,
+        adaptive_contract=safe_contract,
     )
 
 

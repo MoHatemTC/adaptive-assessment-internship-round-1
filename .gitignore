@@ -69,6 +69,3 @@ Cursor.md
 graphify.md
 .graphify/
 graphify-out/
-
-# ── uv (for local tests) ──────────────────────────────────────────────
-uv.lock*.zip

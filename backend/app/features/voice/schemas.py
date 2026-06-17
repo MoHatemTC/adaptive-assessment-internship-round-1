@@ -253,9 +253,20 @@ class VoiceAdaptivePublicResponse(BaseModel):
         voice_session_id: Surrogate primary key of the voice session.
         question_index: Zero-based position in the assessment blueprint.
         flagged: Whether the response was excluded from grading (no reason given).
-        adaptive_contract: Learner-facing next-question navigation only
-            (next question text, difficulty, follow-up depth, stop). All internal
-            grading fields are stripped before this crosses the API boundary.
+        adaptive_contract: Learner-facing next-question navigation only. The API
+            sanitizes the raw contract down to exactly these five fields before
+            returning it:
+
+            * ``next_question_text`` — the next question to pose.
+            * ``difficulty`` — difficulty tier of the next question.
+            * ``follow_up_depth`` — probing depth (``"simple"`` / ``"deep"``).
+            * ``stop`` — whether the session should end.
+            * ``question_index`` — index of the next question.
+
+            The internal fields ``focus_dimension``, ``memory_summary``,
+            ``session_id``, ``tool_type``, and ``cumulative_scores`` carried by
+            ``AdaptiveContract.model_dump()`` are stripped before the response is
+            returned, so they never reach the learner.
     """
 
     session_id: str

@@ -91,25 +91,55 @@ present in the internal contract — are stripped before the response is returne
 Transcript text, average confidence, rubric scores, `grade_result_id`,
 `memory_card_id`, and `flag_reason` are never serialized to the learner.
 
-## STT — Trade-off Notes
+## STT Integration — Cost and Accuracy Trade-offs
 
-- **Azure Whisper over a third-party SDK:** STT is called exclusively through
-  `litellm.atranscription()` against the Sprints LiteLLM proxy
-  (`STT_MODEL=azure/whisper`). This consolidates STT and the grading/generation
-  LLM behind a single vendor and proxy, with one set of credentials and no
-  separate transcription SDK to install, version, or secure.
-- **Current status:** the audio transcriptions route is **not yet configured**
-  on the Sprints LiteLLM proxy — `azure/whisper` currently returns `404`. The
-  feature is wired and tested, but live transcription is blocked awaiting proxy
-  configuration from the infrastructure team.
-- **Graceful degradation:** empty or low-confidence transcripts are flagged.
-  Flagged responses skip memory extraction entirely, and the adaptive loop
-  continues with LLM-only question generation, so a session never hard-fails on
-  missing audio.
-- **Accuracy implication:** without real transcripts, dimension scores reflect
-  question difficulty progression only, not the quality of the learner's spoken
-  response. No memory cards are generated for flagged sessions, so those
-  responses contribute no evidence to the skill-dimension aggregation.
+### Why Azure Whisper via LiteLLM proxy
+
+- **Consolidated billing:** All LLM and STT calls route through
+  the same Sprints proxy endpoint, one API key, one cost center.
+- **No separate SDK:** Deepgram SDK 7.x required its own client,
+  auth flow, and connection management. LiteLLM's atranscription()
+  provides a uniform interface.
+- **Vendor flexibility:** Swapping the STT model requires one
+  .env change (STT_MODEL=...) with no code changes.
+
+### Accuracy comparison
+
+| Factor | Azure Whisper (via proxy) | Deepgram Nova-2 |
+|---|---|---|
+| WER on clear speech | ~3-5% | ~2-3% |
+| WER on accented speech | ~8-15% | ~5-10% |
+| Real-time streaming | No (batch per chunk) | Yes (live tokens) |
+| Confidence scores | Per-segment no_speech_prob | Per-word confidence |
+| Cold start latency | ~300-600ms per chunk | ~50-100ms streaming |
+
+### Cost implications
+
+Whisper via proxy charges per audio minute. At 120s per voice
+question with up to 10 questions per session, maximum cost is
+~20 audio minutes per full assessment. At current proxy rates
+this is negligible for an MVP but should be monitored at scale.
+
+### Current status and degradation
+
+Audio transcriptions route returns 404 on the Sprints proxy
+for azure/whisper — proxy config pending from infrastructure team.
+When STT is unavailable:
+- Each chunk returns ("", 0.0) from _transcribe_chunk
+- _detect_flag returns "empty_transcript"
+- run_memory_agent is skipped (no memory card written)
+- Adaptive loop continues with LLM-only question generation
+- Dimension scores reflect question difficulty only
+
+### Upgrade path
+
+If latency or accuracy becomes a production concern, replace
+_transcribe_chunk to use Deepgram Nova-2 streaming by:
+1. Re-add deepgram-sdk>=7.2.0 to requirements.txt
+2. Add DEEPGRAM_API_KEY to config.py and .env
+3. Replace litellm.atranscription() with AsyncDeepgramClient
+The rest of the evaluation layer (flagging, grading, memory)
+is STT-agnostic and requires no changes.
 
 ## Running Tests
 

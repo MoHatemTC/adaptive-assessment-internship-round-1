@@ -182,6 +182,7 @@ async def test_evaluate_clean_response_grades_and_stores(voice_adaptive_input):
 
     mock_db = AsyncMock()
     mock_db.get = AsyncMock(return_value=voice_session)
+    mock_db.add = MagicMock()  # SQLAlchemy add() is synchronous
 
     rubric_json = json.dumps(
         {
@@ -271,6 +272,7 @@ async def test_communication_signals_computed_on_clean_transcript(
 
     mock_db = AsyncMock()
     mock_db.get = AsyncMock(return_value=voice_session)
+    mock_db.add = MagicMock()  # SQLAlchemy add() is synchronous
 
     # A 35-word transcript so the structure signal (>= 30 words) is engaged.
     transcript = " ".join(f"word{i}" for i in range(35))

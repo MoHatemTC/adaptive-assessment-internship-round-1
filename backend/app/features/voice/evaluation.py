@@ -22,7 +22,11 @@ from app.agent.memory_agent import run_memory_agent
 from app.core.database import async_session
 from app.core.llm import get_llm
 from app.core.logging import get_logger
-from app.features.voice.models import VoiceSession, VoiceTranscript
+from app.features.voice.models import (
+    VoiceMemoryCard,
+    VoiceSession,
+    VoiceTranscript,
+)
 from app.features.voice.schemas import (
     CommunicationSignals,
     TranscriptFlag,
@@ -168,6 +172,11 @@ async def _grade_transcript_with_llm(
         failure a default rubric with ``overall=0.0`` is returned instead of
         raising.
     """
+    # Grade at temperature 0.0 for deterministic, reproducible rubric scores.
+    if hasattr(llm, "temperature"):
+        llm.temperature = 0.0
+    logger.info("llm_grading_temperature", temperature=0.0)
+
     system = (
         "You are a technical interview evaluator. Grade a voice response.\n"
         "Return ONLY valid JSON — no markdown, no code fences, no explanation."
@@ -422,6 +431,26 @@ async def evaluate_voice_response(
                 rubric_scores_json=rubric.model_dump_json(),
                 passed=rubric.overall >= _PASS_THRESHOLD,
                 difficulty=input_data.target_difficulty,
+            )
+
+            # Persist the voice-specific memory card detail in the same session.
+            # The base card is written by run_memory_agent to memory_cards; this
+            # row holds the voice-only fields and links back via memory_card_id.
+            voice_mc = VoiceMemoryCard(
+                voice_session_id=input_data.voice_session_id,
+                memory_card_id=new_card.id if new_card else None,
+                competency=competency,
+                rubric_scores_json=rubric.model_dump_json(),
+                communication_signals_json=(
+                    communication_signals.model_dump_json()
+                ),
+            )
+            db.add(voice_mc)
+            await db.commit()
+            logger.info(
+                "voice_memory_card_persisted",
+                voice_session_id=input_data.voice_session_id,
+                competency=voice_mc.competency,
             )
         else:
             new_card = None
