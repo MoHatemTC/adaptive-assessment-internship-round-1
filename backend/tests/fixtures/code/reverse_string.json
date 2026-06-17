@@ -4,25 +4,25 @@
   "starter_code": "def solution(s: str) -> str:\n    # TODO: reverse the string\n    return s\n",
   "test_cases": [
     {
-      "input": "hello",
+      "input": "print(solution('hello'))",
       "expected_output": "olleh",
       "is_hidden": true,
       "weight": 1.0
     },
     {
-      "input": "abc",
+      "input": "print(solution('abc'))",
       "expected_output": "cba",
       "is_hidden": true,
       "weight": 1.0
     },
     {
-      "input": "",
+      "input": "print(solution(''))",
       "expected_output": "",
       "is_hidden": false,
       "weight": 1.0
     },
     {
-      "input": "a",
+      "input": "print(solution('a'))",
       "expected_output": "a",
       "is_hidden": false,
       "weight": 1.0
