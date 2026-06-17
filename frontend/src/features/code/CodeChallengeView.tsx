@@ -210,8 +210,7 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
           <h1 className="text-2xl font-semibold text-neutral">Adaptive coding</h1>
           <p className="text-sm text-neutral/70">
             Run tests to practice in the sandbox, then submit when ready. Submit
-            runs LLM grading, memory extraction, and adaptation for the next
-            question.
+            saves your response and prepares the next question silently.
           </p>
           <p className="text-xs text-neutral/50">
             Session {sessionLabel}… · assessment {DEFAULT_ASSESSMENT_ID}
@@ -241,20 +240,6 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
         <div className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-neutral/80">
           Question {questionIndex + 1} ·{" "}
           <span className="font-medium capitalize">{difficulty}</span>
-          {activeContract.focus_dimension && (
-            <>
-              {" "}
-              · focus{" "}
-              <span className="font-medium">
-                {activeContract.focus_dimension.replace("_", " ")}
-              </span>
-            </>
-          )}
-          {activeContract.memory_summary && (
-            <p className="mt-1 text-xs text-neutral/60">
-              {activeContract.memory_summary}
-            </p>
-          )}
         </div>
       )}
 
@@ -303,29 +288,6 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
               ? ` You submitted ${questionsAnswered} answer(s).`
               : " No answers were submitted."}
           </p>
-          {activeContract?.memory_summary && (
-            <p className="text-sm text-neutral/70">{activeContract.memory_summary}</p>
-          )}
-          {activeContract && (
-            <ul className="flex flex-wrap gap-2 text-xs">
-              {(
-                [
-                  ["thinking", activeContract.cumulative_scores.thinking],
-                  ["work", activeContract.cumulative_scores.work],
-                  ["digital_ai", activeContract.cumulative_scores.digital_ai],
-                ] as const
-              )
-                .filter(([, value]) => value != null)
-                .map(([name, value]) => (
-                  <li
-                    key={name}
-                    className="rounded-full bg-white px-2.5 py-1 font-medium text-neutral shadow-sm"
-                  >
-                    {name.replace("_", " ")}: {value}/10
-                  </li>
-                ))}
-            </ul>
-          )}
           <button
             type="button"
             onClick={startNewSession}

@@ -9,7 +9,15 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.features.code import adaptation, analysis, evaluation_memory, generation, grading, tool
+from app.features.code import (
+    adaptation,
+    analysis,
+    evaluation_memory,
+    generation,
+    grading,
+    tool,
+)
+from app.features.code.languages import normalize_language
 from app.features.code.models import (
     CodeChallenge,
     CodeSubmission,
@@ -33,7 +41,6 @@ from app.features.code.schemas import (
     TestCaseDTO,
     TestCaseRead,
 )
-from app.features.code.languages import normalize_language
 from app.shared.schemas.memory import DimensionScore, RubricScores
 
 
@@ -47,14 +54,20 @@ def _test_case_to_dto(tc: TestCase) -> TestCaseDTO:
     )
 
 
-def _challenge_to_read(challenge: CodeChallenge, *, learner_view: bool = False) -> ChallengeRead:
+def _challenge_to_read(
+    challenge: CodeChallenge,
+    *,
+    learner_view: bool = False,
+) -> ChallengeRead:
     test_cases: list[TestCaseRead] = []
     for tc in challenge.test_cases:
         test_cases.append(
             TestCaseRead(
                 id=tc.id or 0,
                 input=tc.input,
-                expected_output=None if (learner_view and tc.is_hidden) else tc.expected_output,
+                expected_output=(
+                    None if (learner_view and tc.is_hidden) else tc.expected_output
+                ),
                 is_hidden=tc.is_hidden,
                 weight=tc.weight,
             )
@@ -112,6 +125,20 @@ def _starter_contract(session_id: str) -> AdaptiveContract:
         focus_dimension=None,
         stop=False,
         memory_summary="Starting coding assessment at beginner difficulty.",
+        cumulative_scores=DimensionScore(),
+    )
+
+
+def _learner_safe_contract(contract: AdaptiveContract) -> AdaptiveContract:
+    """Strip private memory/score details before returning to the learner UI."""
+    return AdaptiveContract(
+        session_id=contract.session_id,
+        question_index=contract.question_index,
+        tool_type=contract.tool_type,
+        difficulty=contract.difficulty,
+        focus_dimension=contract.focus_dimension,
+        stop=contract.stop,
+        memory_summary="",
         cumulative_scores=DimensionScore(),
     )
 
@@ -184,7 +211,21 @@ async def generate_challenge(
     payload: GenerateChallengeRequest,
 ) -> GenerateChallengeResponse:
     """Author and persist the next challenge from an adaptive contract."""
-    contract = payload.contract or _starter_contract(payload.session_id)
+    if payload.contract is None:
+        contract = await adaptation.compute_adaptive_contract(
+            db,
+            payload.session_id,
+            payload.assessment_id,
+        )
+    else:
+        contract = await adaptation.compute_adaptive_contract(
+            db,
+            payload.session_id,
+            payload.assessment_id,
+        )
+        if contract.question_index != payload.contract.question_index:
+            contract = payload.contract
+
     if contract.stop:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -225,7 +266,10 @@ async def generate_challenge(
             ],
         ),
     )
-    return GenerateChallengeResponse(challenge=challenge, contract=contract)
+    return GenerateChallengeResponse(
+        challenge=challenge,
+        contract=_learner_safe_contract(contract),
+    )
 
 
 async def list_challenges(db: AsyncSession) -> list[ChallengeListItem]:
@@ -256,15 +300,23 @@ async def get_challenge(
     )
     challenge = result.first()
     if challenge is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Challenge not found",
+        )
     return _challenge_to_read(challenge, learner_view=learner_view)
 
 
 async def get_submission(db: AsyncSession, submission_id: int) -> SubmissionRead:
-    result = await db.exec(select(CodeSubmission).where(CodeSubmission.id == submission_id))
+    result = await db.exec(
+        select(CodeSubmission).where(CodeSubmission.id == submission_id)
+    )
     submission = result.first()
     if submission is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission not found",
+        )
 
     metadata: dict = {}
     if submission.grading_metadata:
@@ -289,7 +341,10 @@ async def submit_code(db: AsyncSession, payload: SubmissionCreate) -> Submission
     )
     challenge = result.first()
     if challenge is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Challenge not found",
+        )
     if not challenge.test_cases:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -363,9 +418,14 @@ async def run_adaptive_loop(
     Layer 4 only reads. The caller is responsible for committing.
 
     Returns:
-        The next :class:`AdaptiveContract` and learner-visible LLM rubric summary.
+        The next :class:`AdaptiveContract` and internal LLM rubric summary.
     """
-    grade = await grading.grade_submission(db, submission_id, session_id, question_index)
+    grade = await grading.grade_submission(
+        db,
+        submission_id,
+        session_id,
+        question_index,
+    )
     rubric = RubricScores.model_validate_json(grade.rubric_scores)
     await evaluation_memory.extract_memory_card(
         db, session_id, question_index, grade.id, difficulty
@@ -393,7 +453,7 @@ async def adaptive_submit(
     )
 
     try:
-        contract, llm_rubric = await run_adaptive_loop(
+        contract, _llm_rubric = await run_adaptive_loop(
             db,
             submission_id=submission.id,
             session_id=payload.session_id,
@@ -411,9 +471,9 @@ async def adaptive_submit(
 
     return AdaptiveSubmitResponse(
         submission_id=submission.id,
-        passed=submission.passed,
-        score=submission.score,
-        llm_rubric=llm_rubric,
-        contract=contract,
+        passed=None,
+        score=None,
+        llm_rubric=None,
+        contract=_learner_safe_contract(contract),
         next_challenge=None,
     )

@@ -1,16 +1,68 @@
-"""E2B sandbox execution — pure execution layer (no DB, no HTTP, no LLM)."""
+"""Coding tool execution and examiner-agent wrapper.
+
+The low-level helpers in this module run learner code in E2B. ``CodeTool`` wraps
+the adaptive submit flow as a LangGraph ``BaseTool`` for the examiner agent and
+returns only a silent acknowledgement plus the next-question contract.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, TypedDict
 
+from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
+from app.core.base_tool import BaseTool
+from app.core.database import async_session
 from app.features.code.languages import build_runner_script, runner_path, solution_path
-from app.features.code.schemas import ExecutionOutcome, TestCaseDTO, TestCaseResult
+from app.features.code.schemas import (
+    AdaptiveSubmitRequest,
+    CodeToolInput,
+    CodeToolOutput,
+    ExecutionOutcome,
+    TestCaseDTO,
+    TestCaseResult,
+)
 
 PASS_THRESHOLD = 0.6
+
+
+class CodeToolState(TypedDict, total=False):
+    """LangGraph state for the examiner-agent coding tool."""
+
+    challenge_id: int
+    session_id: str
+    assessment_id: str
+    submitted_code: str
+    question_index: int
+    difficulty: str
+    received: bool
+    submission_id: int
+    contract: dict[str, Any]
+
+
+def _timeout_results(test_cases: list[TestCaseDTO], error: str) -> list[TestCaseResult]:
+    return [
+        TestCaseResult(
+            test_case_id=tc.id,
+            passed=False,
+            actual_output="",
+            expected_output=tc.expected_output,
+            execution_time_ms=0.0,
+            error=error,
+        )
+        for tc in test_cases
+    ]
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    message = str(exc).lower()
+    return "timed out" in message or "timeout" in message
 
 
 def _run_in_sandbox(
@@ -46,7 +98,10 @@ def _run_in_sandbox(
         )
 
         if command_result.exit_code != 0:
-            error_msg = command_result.stderr or f"Process exited with {command_result.exit_code}"
+            error_msg = (
+                command_result.stderr
+                or f"Process exited with {command_result.exit_code}"
+            )
             results = [
                 TestCaseResult(
                     test_case_id=tc.id,
@@ -67,9 +122,23 @@ def _run_in_sandbox(
         raw_results: list[dict[str, Any]] = json.loads(stdout)
         results = [TestCaseResult(**r) for r in raw_results]
         return ExecutionOutcome.SUCCESS, results, None
+    except TimeoutError as exc:
+        message = str(exc) or "Sandbox execution timed out"
+        return (
+            ExecutionOutcome.SANDBOX_TIMEOUT,
+            _timeout_results(test_cases, message),
+            message,
+        )
     except ValueError as exc:
         return ExecutionOutcome.SANDBOX_ERROR, [], str(exc)
     except Exception as exc:  # noqa: BLE001 — surface sandbox failures to caller
+        if _is_timeout_error(exc):
+            message = str(exc) or "Sandbox execution timed out"
+            return (
+                ExecutionOutcome.SANDBOX_TIMEOUT,
+                _timeout_results(test_cases, message),
+                message,
+            )
         return ExecutionOutcome.SANDBOX_UNAVAILABLE, [], str(exc)
     finally:
         if sandbox is not None:
@@ -90,13 +159,24 @@ async def execute_submission(
     if not test_cases:
         return ExecutionOutcome.SANDBOX_ERROR, [], "No test cases provided"
 
-    return await asyncio.to_thread(
-        _run_in_sandbox,
-        submitted_code,
-        test_cases,
-        timeout_seconds,
-        language=language,
-    )
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _run_in_sandbox,
+                submitted_code,
+                test_cases,
+                timeout_seconds,
+                language=language,
+            ),
+            timeout=max(1, timeout_seconds) + 15,
+        )
+    except TimeoutError as exc:
+        message = str(exc) or "Sandbox execution timed out"
+        return (
+            ExecutionOutcome.SANDBOX_TIMEOUT,
+            _timeout_results(test_cases, message),
+            message,
+        )
 
 
 def compute_weighted_score(
@@ -109,12 +189,17 @@ def compute_weighted_score(
     if total_weight <= 0:
         return 0.0
     passed_weight = sum(
-        tc.weight for tc, result in zip(test_cases, results, strict=False) if result.passed
+        tc.weight
+        for tc, result in zip(test_cases, results, strict=False)
+        if result.passed
     )
     return round(passed_weight / total_weight, 3)
 
 
-def build_rubric_scores(results: list[TestCaseResult], overall_score: float) -> list[dict[str, Any]]:
+def build_rubric_scores(
+    results: list[TestCaseResult],
+    overall_score: float,
+) -> list[dict[str, Any]]:
     avg_exec_ms = (
         sum(r.execution_time_ms for r in results) / len(results) if results else 0.0
     )
@@ -169,3 +254,42 @@ def filter_visible_results(
         else:
             visible.append(result)
     return visible
+
+
+class CodeTool(BaseTool):
+    """Examiner-agent tool for adaptive coding submissions."""
+
+    @property
+    def tool_name(self) -> str:
+        return "code_tool"
+
+    @property
+    def tool_description(self) -> str:
+        return (
+            "Executes a coding answer in the E2B sandbox, silently persists grading "
+            "and memory records, and returns the next adaptive contract."
+        )
+
+    def build_graph(self) -> CompiledStateGraph:
+        graph = StateGraph(CodeToolState)
+        graph.add_node("submit_code", self._submit_code)
+        graph.set_entry_point("submit_code")
+        graph.add_edge("submit_code", END)
+        return graph.compile()
+
+    async def _submit_code(self, state: CodeToolState) -> dict[str, Any]:
+        from app.features.code import service
+
+        input_state = CodeToolInput.model_validate(state)
+        async with async_session() as db:
+            response = await service.adaptive_submit(
+                db,
+                AdaptiveSubmitRequest(**input_state.model_dump()),
+            )
+
+        output = CodeToolOutput(
+            received=True,
+            submission_id=response.submission_id,
+            contract=response.contract,
+        )
+        return output.model_dump()

@@ -5,14 +5,16 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.features.code.models import SubmissionStatus
 from app.features.code.languages import normalize_language
+from app.features.code.models import SubmissionStatus
 from app.shared.schemas.memory import AdaptiveContract, DifficultyLevel
 
 __all__ = [
     "AdaptiveContract",
     "AdaptiveSubmitRequest",
     "AdaptiveSubmitResponse",
+    "CodeToolInput",
+    "CodeToolOutput",
     "GenerateChallengeRequest",
     "GenerateChallengeResponse",
     "LlmRubricSummary",
@@ -115,7 +117,31 @@ class TestCaseDTO(BaseModel):
 class ExecutionOutcome(str, Enum):
     SUCCESS = "success"
     SANDBOX_ERROR = "sandbox_error"
+    SANDBOX_TIMEOUT = "sandbox_timeout"
     SANDBOX_UNAVAILABLE = "sandbox_unavailable"
+
+
+class CodeToolInput(BaseModel):
+    """Typed input passed from the examiner agent to the coding BaseTool."""
+
+    challenge_id: int
+    session_id: str = Field(min_length=1, max_length=64)
+    assessment_id: str = Field(min_length=1, max_length=64)
+    submitted_code: str = Field(min_length=1)
+    question_index: int = Field(ge=0)
+    difficulty: DifficultyLevel
+
+
+class CodeToolOutput(BaseModel):
+    """Silent structured output returned to the examiner agent.
+
+    No grading rubric, score, memory-card detail, or test output is exposed here.
+    The platform tables remain the source of truth for those private records.
+    """
+
+    received: bool
+    submission_id: int
+    contract: AdaptiveContract
 
 
 class AdaptiveSubmitRequest(BaseModel):
@@ -141,15 +167,15 @@ class AdaptiveSubmitRequest(BaseModel):
 class AdaptiveSubmitResponse(BaseModel):
     """Response from the adaptive submit endpoint.
 
-    Carries learner-safe sandbox results, LLM rubric feedback, the adaptive
-    contract, and — when the loop continues — the LLM-generated next challenge.
+    Carries only a learner-safe acknowledgement and adaptive contract. Official
+    grading, rubric, and memory details remain in platform tables.
 
     Attributes:
         submission_id: PK of the persisted ``code_submissions`` row.
-        passed: Whether the submission cleared the sandbox pass threshold.
-        score: Weighted sandbox score in ``[0, 1]``.
-        llm_rubric: Approach/efficiency feedback from Layer 1 LLM grading.
-        contract: The adaptive contract for the next question.
+        passed: Always ``None`` for official learner-facing submits.
+        score: Always ``None`` for official learner-facing submits.
+        llm_rubric: Always ``None`` during the learner session.
+        contract: Learner-safe adaptive contract for the next question.
         next_challenge: Generated challenge when ``contract.stop`` is false.
     """
 
@@ -162,7 +188,7 @@ class AdaptiveSubmitResponse(BaseModel):
 
 
 class LlmRubricSummary(BaseModel):
-    """Learner-visible subset of the Layer 1 LLM rubric."""
+    """Internal summary of the Layer 1 LLM rubric."""
 
     approach_score: float = Field(ge=0.0, le=1.0)
     approach_feedback: str
