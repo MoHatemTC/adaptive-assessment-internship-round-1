@@ -12,6 +12,13 @@ function apiUrl(path: string): string {
 }
 
 export type ToolType = "voice" | "mcq" | "diagram" | "coding";
+export type SupportedLanguage = "python" | "javascript";
+
+export interface CodeLanguage {
+  id: SupportedLanguage;
+  label: string;
+  monaco_language: string;
+}
 export type DifficultyLevel = "beginner" | "intermediate" | "advanced";
 export type DimensionName =
   | "thinking"
@@ -142,6 +149,7 @@ export interface GenerateChallengeRequest {
   session_id: string;
   assessment_id: string;
   contract?: AdaptiveContract | null;
+  language?: SupportedLanguage;
 }
 
 export interface GenerateChallengeResponse {
@@ -195,6 +203,10 @@ export function createAdaptiveCodeSubmission(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function listCodeLanguages(): Promise<CodeLanguage[]> {
+  return request<CodeLanguage[]>("/api/v1/code/languages");
 }
 
 export function generateCodeChallenge(

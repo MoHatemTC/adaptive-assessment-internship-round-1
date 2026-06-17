@@ -33,6 +33,7 @@ from app.features.code.schemas import (
     TestCaseDTO,
     TestCaseRead,
 )
+from app.features.code.languages import normalize_language
 from app.shared.schemas.memory import DimensionScore, RubricScores
 
 
@@ -191,10 +192,12 @@ async def generate_challenge(
         )
 
     previous_titles = await _session_challenge_titles(db, payload.session_id)
+    language = normalize_language(payload.language)
     try:
         spec = await generation.generate_challenge_spec(
             contract=contract,
             assessment_id=payload.assessment_id,
+            language=language,
             previous_titles=previous_titles,
         )
     except grading.LLMGradingUnavailable as exc:
@@ -209,7 +212,7 @@ async def generate_challenge(
             title=spec.title,
             description=spec.description,
             starter_code=spec.starter_code,
-            language="python",
+            language=language,
             time_limit_seconds=20,
             test_cases=[
                 TestCaseCreate(

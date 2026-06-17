@@ -38,6 +38,55 @@ def _fake_spec() -> GeneratedChallengeSpec:
 
 
 @pytest.mark.asyncio
+async def test_generate_challenge_persists_javascript_spec(monkeypatch):
+    async def _fake_generate(**kwargs) -> GeneratedChallengeSpec:
+        assert kwargs["language"] == "javascript"
+        return GeneratedChallengeSpec(
+            title="Sum Array",
+            description="Return the sum of numbers in the array.",
+            starter_code="module.exports = function solution(nums) {\n  // TODO\n  return 0;\n};\n",
+            test_cases=[
+                GeneratedTestCase(
+                    input="console.log(solution([1, 2, 3]))",
+                    expected_output="6",
+                    is_hidden=False,
+                ),
+                GeneratedTestCase(
+                    input="console.log(solution([]))",
+                    expected_output="0",
+                    is_hidden=False,
+                ),
+                GeneratedTestCase(
+                    input="console.log(solution([5]))",
+                    expected_output="5",
+                    is_hidden=True,
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(generation, "generate_challenge_spec", _fake_generate)
+    session_id = str(uuid.uuid4())
+
+    from app.core.database import async_session, engine
+
+    try:
+        async with async_session() as db:
+            result = await service.generate_challenge(
+                db,
+                GenerateChallengeRequest(
+                    session_id=session_id,
+                    assessment_id="assess-gen",
+                    language="javascript",
+                ),
+            )
+            assert result.challenge.language == "javascript"
+            assert "module.exports" in result.challenge.starter_code
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_generate_challenge_persists_llm_spec(monkeypatch):
     async def _fake_generate(**kwargs) -> GeneratedChallengeSpec:
         return _fake_spec()

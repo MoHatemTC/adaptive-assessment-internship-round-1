@@ -21,6 +21,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.llm import get_llm_with_tracing
 from app.core.logging import get_logger
+from app.features.code.languages import get_language_config
 from app.features.code.models import CodeChallenge, CodeSubmission
 from app.sessions.models import GradeResult
 from app.shared.schemas.memory import RubricDimension, RubricScores
@@ -89,14 +90,15 @@ def _build_rubric_prompt(
     Returns:
         The formatted prompt string.
     """
+    config = get_language_config(language)
     return (
         f"Challenge: {title}\n"
-        f"Language: {language}\n\n"
+        f"Language: {config.label} ({config.id})\n\n"
         f"Description:\n{description}\n\n"
         f"Sandbox result: {passed_tests}/{total_tests} tests passed "
         f"(score {sandbox_score:.2f}).\n\n"
-        f"Submitted code:\n```\n{submitted_code}\n```\n\n"
-        "Evaluate approach and efficiency now."
+        f"Submitted {config.label} code:\n```{config.id}\n{submitted_code}\n```\n\n"
+        f"Evaluate approach and efficiency for this {config.label} solution."
     )
 
 

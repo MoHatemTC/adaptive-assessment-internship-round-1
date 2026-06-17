@@ -5,6 +5,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.deps import RateLimitedRoute, get_db
 from app.features.code import service
+from app.features.code.languages import SUPPORTED_LANGUAGES, get_language_config
 from app.features.code.schemas import (
     AdaptiveSubmitRequest,
     AdaptiveSubmitResponse,
@@ -18,6 +19,18 @@ from app.features.code.schemas import (
 )
 
 router = APIRouter(prefix="/api/v1/code", tags=["code"], route_class=RateLimitedRoute)
+
+
+@router.get("/languages")
+async def list_supported_languages(request: Request) -> list[dict[str, str]]:
+    return [
+        {
+            "id": lang,
+            "label": get_language_config(lang).label,
+            "monaco_language": get_language_config(lang).monaco_language,
+        }
+        for lang in SUPPORTED_LANGUAGES
+    ]
 
 
 @router.post("/challenges", response_model=ChallengeRead, status_code=201)

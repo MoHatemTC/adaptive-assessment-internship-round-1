@@ -8,6 +8,14 @@ from pydantic import BaseModel, Field, ValidationError
 from app.core.llm import get_llm_with_tracing
 from app.core.logging import get_logger
 from app.features.code.grading import LLMGradingUnavailable, _is_llm_unavailable
+from app.features.code.languages import (
+    SupportedLanguage,
+    generator_retry_prompt,
+    generator_starter_description,
+    generator_system_prompt,
+    generator_test_case_description,
+    normalize_language,
+)
 from app.shared.schemas.memory import AdaptiveContract, DifficultyLevel, DimensionName
 
 _logger = get_logger(__name__)
@@ -28,9 +36,7 @@ _DIFFICULTY_HINTS: dict[DifficultyLevel, str] = {
 
 
 class GeneratedTestCase(BaseModel):
-    input: str = Field(
-        description="Executable Python that calls solution(...), e.g. print(solution('hi'))"
-    )
+    input: str
     expected_output: str
     is_hidden: bool = False
 
@@ -38,37 +44,29 @@ class GeneratedTestCase(BaseModel):
 class GeneratedChallengeSpec(BaseModel):
     title: str = Field(min_length=3, max_length=120)
     description: str = Field(min_length=20)
-    starter_code: str = Field(
-        description="Python starter with def solution(...) and a TODO body"
-    )
+    starter_code: str
     test_cases: list[GeneratedTestCase] = Field(min_length=3, max_length=6)
 
-
-_GENERATOR_SYSTEM_PROMPT = (
-    "You are an expert coding-assessment author. Produce ONE original Python "
-    "challenge for a learner.\n\n"
-    "Rules:\n"
-    "- Define exactly one entry point: def solution(...)\n"
-    "- starter_code must include that function with a TODO/pass body\n"
-    "- Every test case input MUST be valid Python that calls solution, "
-    "typically print(solution(...))\n"
-    "- expected_output is the stdout the sandbox expects (no trailing newline)\n"
-    "- Include at least 2 visible tests (is_hidden=false) and at least 1 hidden test\n"
-    "- Do not reuse titles from the avoid list\n"
-    "- Keep problems fair and self-contained — no imports beyond the standard library\n"
-    "- Return JSON matching the schema exactly"
-)
-
-_RETRY_PROMPT = (
-    "Invalid challenge spec. Ensure test inputs are executable Python like "
-    "print(solution('abc')), include hidden and visible tests, and use def solution(...)."
-)
+    @classmethod
+    def model_json_schema_for_language(cls, language: str | None) -> dict:
+        """Build a schema hint with language-specific field descriptions."""
+        schema = cls.model_json_schema()
+        props = schema.get("properties", {})
+        if "starter_code" in props:
+            props["starter_code"]["description"] = generator_starter_description(language)
+        test_case_schema = props.get("test_cases", {}).get("items", {})
+        if "input" in test_case_schema.get("properties", {}):
+            test_case_schema["properties"]["input"]["description"] = (
+                generator_test_case_description(language)
+            )
+        return schema
 
 
 def _build_generator_prompt(
     *,
     contract: AdaptiveContract,
     assessment_id: str,
+    language: SupportedLanguage,
     previous_titles: list[str],
 ) -> str:
     focus = contract.focus_dimension
@@ -76,6 +74,7 @@ def _build_generator_prompt(
     avoid = ", ".join(previous_titles) if previous_titles else "(none yet)"
     return (
         f"Assessment: {assessment_id}\n"
+        f"Language: {language}\n"
         f"Question index: {contract.question_index}\n"
         f"Difficulty: {contract.difficulty} — {_DIFFICULTY_HINTS[contract.difficulty]}\n"
         f"Focus dimension: {focus or 'general'} — emphasise {focus_hint}\n"
@@ -89,18 +88,21 @@ async def generate_challenge_spec(
     *,
     contract: AdaptiveContract,
     assessment_id: str,
+    language: str | None = "python",
     previous_titles: list[str] | None = None,
 ) -> GeneratedChallengeSpec:
     """Ask the LLM for a challenge spec matching the adaptive contract."""
+    lang = normalize_language(language)
     llm, callbacks = get_llm_with_tracing()
     structured = llm.bind(streaming=False).with_structured_output(GeneratedChallengeSpec)
     messages: list[tuple[str, str]] = [
-        ("system", _GENERATOR_SYSTEM_PROMPT),
+        ("system", generator_system_prompt(lang)),
         (
             "human",
             _build_generator_prompt(
                 contract=contract,
                 assessment_id=assessment_id,
+                language=lang,
                 previous_titles=previous_titles or [],
             ),
         ),
@@ -121,6 +123,7 @@ async def generate_challenge_spec(
                 question_index=contract.question_index,
                 title=spec.title,
                 difficulty=contract.difficulty,
+                language=lang,
             )
             return spec
         except (OutputParserException, ValidationError) as exc:
@@ -128,9 +131,10 @@ async def generate_challenge_spec(
             _logger.warning(
                 "code_challenge_generation_parse_failed",
                 attempt=attempt + 1,
+                language=lang,
                 error=str(exc),
             )
-            messages.append(("human", _RETRY_PROMPT))
+            messages.append(("human", generator_retry_prompt(lang)))
         except Exception as exc:
             if _is_llm_unavailable(exc):
                 raise LLMGradingUnavailable(

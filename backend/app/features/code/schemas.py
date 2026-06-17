@@ -3,9 +3,10 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.features.code.models import SubmissionStatus
+from app.features.code.languages import normalize_language
 from app.shared.schemas.memory import AdaptiveContract, DifficultyLevel
 
 __all__ = [
@@ -176,6 +177,12 @@ class GenerateChallengeRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=64)
     assessment_id: str = Field(min_length=1, max_length=64)
     contract: AdaptiveContract | None = None
+    language: str = "python"
+
+    @field_validator("language")
+    @classmethod
+    def _validate_language(cls, value: str) -> str:
+        return normalize_language(value)
 
 
 class GenerateChallengeResponse(BaseModel):

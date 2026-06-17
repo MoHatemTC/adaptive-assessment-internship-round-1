@@ -201,7 +201,7 @@ export function CodeEditor({
         <h2 className="text-lg font-semibold text-neutral">{challenge.title}</h2>
         <p className="mt-1 text-sm text-neutral/80">{challenge.description}</p>
         <p className="mt-2 text-xs text-neutral/60">
-          Question {questionIndex + 1} · {difficulty}
+          Question {questionIndex + 1} · {difficulty} · {challenge.language}
         </p>
       </div>
 
