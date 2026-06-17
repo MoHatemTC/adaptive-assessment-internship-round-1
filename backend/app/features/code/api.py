@@ -5,17 +5,32 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.deps import RateLimitedRoute, get_db
 from app.features.code import service
+from app.features.code.languages import SUPPORTED_LANGUAGES, get_language_config
 from app.features.code.schemas import (
     AdaptiveSubmitRequest,
     AdaptiveSubmitResponse,
     ChallengeCreate,
     ChallengeListItem,
     ChallengeRead,
+    GenerateChallengeRequest,
+    GenerateChallengeResponse,
     SubmissionCreate,
     SubmissionRead,
 )
 
 router = APIRouter(prefix="/api/v1/code", tags=["code"], route_class=RateLimitedRoute)
+
+
+@router.get("/languages")
+async def list_supported_languages(request: Request) -> list[dict[str, str]]:
+    return [
+        {
+            "id": lang,
+            "label": get_language_config(lang).label,
+            "monaco_language": get_language_config(lang).monaco_language,
+        }
+        for lang in SUPPORTED_LANGUAGES
+    ]
 
 
 @router.post("/challenges", response_model=ChallengeRead, status_code=201)
@@ -69,3 +84,12 @@ async def adaptive_submit(
     db: AsyncSession = Depends(get_db),
 ) -> AdaptiveSubmitResponse:
     return await service.adaptive_submit(db, payload)
+
+
+@router.post("/generate-challenge", response_model=GenerateChallengeResponse, status_code=201)
+async def generate_challenge(
+    request: Request,
+    payload: GenerateChallengeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> GenerateChallengeResponse:
+    return await service.generate_challenge(db, payload)

@@ -7,55 +7,18 @@ import json
 import os
 from typing import Any
 
+from app.features.code.languages import build_runner_script, runner_path, solution_path
 from app.features.code.schemas import ExecutionOutcome, TestCaseDTO, TestCaseResult
 
-RUNNER_BODY = '''
-from solution import solution
-import json, io, sys, traceback, time
-
-test_cases = json.loads(__TEST_CASES_JSON__)
-
-results = []
-for tc in test_cases:
-    try:
-        captured = io.StringIO()
-        sys.stdout = captured
-        start = time.monotonic()
-        exec(tc["input"], {"solution": solution})
-        elapsed = (time.monotonic() - start) * 1000
-        sys.stdout = sys.__stdout__
-        actual = captured.getvalue().strip()
-        results.append({
-            "test_case_id": tc["id"],
-            "passed": actual == tc["expected_output"].strip(),
-            "actual_output": actual,
-            "expected_output": tc["expected_output"],
-            "execution_time_ms": elapsed,
-            "error": None
-        })
-    except Exception:
-        sys.stdout = sys.__stdout__
-        results.append({
-            "test_case_id": tc["id"],
-            "passed": False,
-            "actual_output": "",
-            "expected_output": tc["expected_output"],
-            "execution_time_ms": 0.0,
-            "error": traceback.format_exc(limit=3)
-        })
-
-print(json.dumps(results))
-'''
-
 PASS_THRESHOLD = 0.6
-_SOLUTION_PATH = "/home/user/solution.py"
-_RUNNER_PATH = "/home/user/runner.py"
 
 
 def _run_in_sandbox(
     submitted_code: str,
     test_cases: list[TestCaseDTO],
     timeout_seconds: int,
+    *,
+    language: str,
 ) -> tuple[ExecutionOutcome, list[TestCaseResult], str | None]:
     from e2b_code_interpreter import Sandbox
 
@@ -63,17 +26,22 @@ def _run_in_sandbox(
     if not api_key:
         return ExecutionOutcome.SANDBOX_UNAVAILABLE, [], "E2B_API_KEY not configured"
 
+    try:
+        config, runner_template = build_runner_script(language)
+    except ValueError as exc:
+        return ExecutionOutcome.SANDBOX_ERROR, [], str(exc)
+
     tc_json_literal = repr(json.dumps([tc.model_dump() for tc in test_cases]))
-    runner_script = RUNNER_BODY.replace("__TEST_CASES_JSON__", tc_json_literal)
+    runner_script = runner_template.replace("__TEST_CASES_JSON__", tc_json_literal)
 
     sandbox = None
     try:
         sandbox = Sandbox.create(timeout=timeout_seconds + 10, api_key=api_key)
-        sandbox.files.write(_SOLUTION_PATH, submitted_code)
-        sandbox.files.write(_RUNNER_PATH, runner_script)
+        sandbox.files.write(solution_path(config), submitted_code)
+        sandbox.files.write(runner_path(config), runner_script)
 
         command_result = sandbox.commands.run(
-            f"python {_RUNNER_PATH}",
+            config.run_command,
             timeout=timeout_seconds,
         )
 
@@ -99,6 +67,8 @@ def _run_in_sandbox(
         raw_results: list[dict[str, Any]] = json.loads(stdout)
         results = [TestCaseResult(**r) for r in raw_results]
         return ExecutionOutcome.SUCCESS, results, None
+    except ValueError as exc:
+        return ExecutionOutcome.SANDBOX_ERROR, [], str(exc)
     except Exception as exc:  # noqa: BLE001 — surface sandbox failures to caller
         return ExecutionOutcome.SANDBOX_UNAVAILABLE, [], str(exc)
     finally:
@@ -117,9 +87,6 @@ async def execute_submission(
     timeout_seconds: int = 20,
 ) -> tuple[ExecutionOutcome, list[TestCaseResult], str | None]:
     """Execute learner code against test cases in an E2B sandbox."""
-    if language != "python":
-        return ExecutionOutcome.SANDBOX_ERROR, [], f"Unsupported language: {language}"
-
     if not test_cases:
         return ExecutionOutcome.SANDBOX_ERROR, [], "No test cases provided"
 
@@ -128,6 +95,7 @@ async def execute_submission(
         submitted_code,
         test_cases,
         timeout_seconds,
+        language=language,
     )
 
 

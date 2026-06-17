@@ -3,15 +3,19 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.features.code.models import SubmissionStatus
+from app.features.code.languages import normalize_language
 from app.shared.schemas.memory import AdaptiveContract, DifficultyLevel
 
 __all__ = [
     "AdaptiveContract",
     "AdaptiveSubmitRequest",
     "AdaptiveSubmitResponse",
+    "GenerateChallengeRequest",
+    "GenerateChallengeResponse",
+    "LlmRubricSummary",
 ]
 
 
@@ -137,17 +141,52 @@ class AdaptiveSubmitRequest(BaseModel):
 class AdaptiveSubmitResponse(BaseModel):
     """Response from the adaptive submit endpoint.
 
-    Carries only learner-safe data plus the adaptive contract for the next
-    question. Raw ``grade_results`` / ``memory_cards`` are never exposed.
+    Carries learner-safe sandbox results, LLM rubric feedback, the adaptive
+    contract, and — when the loop continues — the LLM-generated next challenge.
 
     Attributes:
         submission_id: PK of the persisted ``code_submissions`` row.
         passed: Whether the submission cleared the sandbox pass threshold.
         score: Weighted sandbox score in ``[0, 1]``.
+        llm_rubric: Approach/efficiency feedback from Layer 1 LLM grading.
         contract: The adaptive contract for the next question.
+        next_challenge: Generated challenge when ``contract.stop`` is false.
     """
 
     submission_id: int
     passed: bool | None
     score: float | None
+    llm_rubric: "LlmRubricSummary | None" = None
+    contract: AdaptiveContract
+    next_challenge: ChallengeRead | None = None
+
+
+class LlmRubricSummary(BaseModel):
+    """Learner-visible subset of the Layer 1 LLM rubric."""
+
+    approach_score: float = Field(ge=0.0, le=1.0)
+    approach_feedback: str
+    efficiency_score: float = Field(ge=0.0, le=1.0)
+    efficiency_feedback: str
+    overall: float = Field(ge=0.0, le=1.0)
+
+
+class GenerateChallengeRequest(BaseModel):
+    """Request the Generator Agent to author the next coding challenge."""
+
+    session_id: str = Field(min_length=1, max_length=64)
+    assessment_id: str = Field(min_length=1, max_length=64)
+    contract: AdaptiveContract | None = None
+    language: str = "python"
+
+    @field_validator("language")
+    @classmethod
+    def _validate_language(cls, value: str) -> str:
+        return normalize_language(value)
+
+
+class GenerateChallengeResponse(BaseModel):
+    """A freshly generated challenge plus the contract that shaped it."""
+
+    challenge: ChallengeRead
     contract: AdaptiveContract

@@ -39,9 +39,15 @@ services:
 
   frontend:
     build: ./frontend
-    env_file: frontend/.env.example
+    environment:
+      # Browser calls same-origin /api (nginx or Next rewrites). Do not point at :8000.
+      NEXT_PUBLIC_API_BASE_URL: ""
+      NEXT_PUBLIC_API_URL: ""
+      BACKEND_URL: http://backend:8000
     ports:
       - "3000:3000"
+    depends_on:
+      - backend
     restart: unless-stopped
 
   db:
