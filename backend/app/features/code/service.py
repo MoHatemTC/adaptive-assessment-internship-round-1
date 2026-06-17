@@ -306,14 +306,21 @@ async def adaptive_submit(
         ),
     )
 
-    contract = await run_adaptive_loop(
-        db,
-        submission_id=submission.id,
-        session_id=payload.session_id,
-        assessment_id=payload.assessment_id,
-        question_index=payload.question_index,
-        difficulty=payload.difficulty,
-    )
+    try:
+        contract = await run_adaptive_loop(
+            db,
+            submission_id=submission.id,
+            session_id=payload.session_id,
+            assessment_id=payload.assessment_id,
+            question_index=payload.question_index,
+            difficulty=payload.difficulty,
+        )
+    except grading.LLMGradingUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
     await db.commit()
 
     return AdaptiveSubmitResponse(
