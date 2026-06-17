@@ -4,7 +4,7 @@ Layer functions and DB access are mocked so the suite runs without a live
 database or API key, following the patterns in test_voice_evaluation.py.
 """
 
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -90,7 +90,10 @@ async def test_loop_returns_adaptive_output(loop_input):
 
     with (
         patch(f"{_LOOP}.evaluate_voice_response", AsyncMock(return_value=eval_out)),
-        patch(f"{_LOOP}.analyze_voice_session", AsyncMock(return_value=_make_analysis())),
+        patch(
+            f"{_LOOP}.analyze_voice_session",
+            AsyncMock(return_value=_make_analysis()),
+        ),
         patch(
             f"{_LOOP}.generate_next_voice_question",
             AsyncMock(return_value=("Next question?", "advanced", "deep")),
@@ -117,7 +120,10 @@ async def test_loop_next_question_in_contract(loop_input):
 
     with (
         patch(f"{_LOOP}.evaluate_voice_response", AsyncMock(return_value=eval_out)),
-        patch(f"{_LOOP}.analyze_voice_session", AsyncMock(return_value=_make_analysis())),
+        patch(
+            f"{_LOOP}.analyze_voice_session",
+            AsyncMock(return_value=_make_analysis()),
+        ),
         patch(
             f"{_LOOP}.generate_next_voice_question",
             AsyncMock(return_value=(next_q, "advanced", "deep")),
@@ -147,7 +153,10 @@ async def test_loop_propagates_flagged_output(loop_input):
         patch(
             f"{_LOOP}.evaluate_voice_response", AsyncMock(return_value=flagged_out)
         ),
-        patch(f"{_LOOP}.analyze_voice_session", AsyncMock(return_value=_make_analysis())),
+        patch(
+            f"{_LOOP}.analyze_voice_session",
+            AsyncMock(return_value=_make_analysis()),
+        ),
         patch(
             f"{_LOOP}.generate_next_voice_question",
             AsyncMock(return_value=("Fallback question.", "beginner", "simple")),

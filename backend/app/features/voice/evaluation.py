@@ -12,10 +12,9 @@ returned as flagged outputs with ``flag_reason="failed"``.
 """
 
 import json
-from typing import Optional
+from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_litellm import ChatLiteLLM
 from sqlalchemy import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -25,9 +24,11 @@ from app.core.llm import get_llm
 from app.core.logging import get_logger
 from app.features.voice.models import VoiceSession, VoiceTranscript
 from app.features.voice.schemas import (
+    CommunicationSignals,
     TranscriptFlag,
     VoiceAdaptiveInput,
     VoiceAdaptiveOutput,
+    VoiceMemoryCardCreate,
 )
 from app.sessions.models import GradeResult
 from app.shared.schemas.memory import (
@@ -150,7 +151,7 @@ async def _grade_transcript_with_llm(
     question_text: str,
     transcript: str,
     difficulty: str,
-    llm: ChatLiteLLM,
+    llm: Any,
 ) -> RubricScores:
     """Grade a voice transcript against a rubric using the kernel LLM gateway.
 
@@ -158,7 +159,9 @@ async def _grade_transcript_with_llm(
         question_text: The interview question that was posed.
         transcript: The learner's assembled transcript text.
         difficulty: Difficulty tier the question targeted.
-        llm: Configured LLM instance from the kernel factory.
+        llm: Configured LLM instance from the kernel factory
+            (:func:`app.core.llm.get_llm`). Typed as ``Any`` so this module
+            never imports a concrete LLM class directly.
 
     Returns:
         The parsed :class:`~app.shared.schemas.memory.RubricScores`. On any
@@ -365,17 +368,69 @@ async def evaluate_voice_response(
             summary=evidence_summary,
         )
 
-        # 7. Extract a memory card (Layer 6).
-        new_card, memory_summary = await run_memory_agent(
-            session_id=input_data.session_id,
-            tool_type="voice",
-            question_index=input_data.question_index,
-            question_text=input_data.question_text,
-            learner_response=transcript if transcript else "[no response]",
-            rubric_scores_json=rubric.model_dump_json(),
-            passed=rubric.overall >= _PASS_THRESHOLD,
-            difficulty=input_data.target_difficulty,
-        )
+        # 7. Extract a memory card (Layer 6) — only for clean, gradeable
+        #    responses. Flagged transcripts carry no learner evidence, so the
+        #    memory agent is skipped entirely.
+        if not flagged:
+            # Derive a short competency label from the question (first words).
+            competency = " ".join(input_data.question_text.split()[:6])
+
+            # Voice-specific communication signals from STT confidence and
+            # transcript quality. Silent — never surfaced to the learner.
+            communication_signals = CommunicationSignals(
+                clarity=avg_confidence >= 0.75,
+                fluency=avg_confidence >= 0.70,
+                confidence=not flagged and rubric.overall >= _PASS_THRESHOLD,
+                structure=len(transcript.split()) >= 30,
+            )
+            logger.info(
+                "communication_signals_computed",
+                clarity=communication_signals.clarity,
+                fluency=communication_signals.fluency,
+                confidence=communication_signals.confidence,
+                structure=communication_signals.structure,
+            )
+
+            # Richer voice-specific evidence context, held locally in the
+            # evaluation layer. Persistence still flows through run_memory_agent,
+            # which writes the base MemoryCardCreate to the shared memory_cards
+            # table; the voice-only fields below never reach that table.
+            voice_card = VoiceMemoryCardCreate(
+                session_id=input_data.session_id,
+                tool_type="voice",
+                question_index=input_data.question_index,
+                difficulty=input_data.target_difficulty,
+                evidence_summary=evidence_summary,
+                dimension_signals=_build_dimension_signals(rubric),
+                passed=rubric.overall >= _PASS_THRESHOLD,
+                competency=competency,
+                rubric_scores_json=rubric.model_dump_json(),
+                communication_signals=communication_signals,
+            )
+            logger.info(
+                "voice_memory_card_built",
+                voice_session_id=input_data.voice_session_id,
+                competency=voice_card.competency,
+            )
+
+            new_card, memory_summary = await run_memory_agent(
+                session_id=input_data.session_id,
+                tool_type="voice",
+                question_index=input_data.question_index,
+                question_text=input_data.question_text,
+                learner_response=transcript,
+                rubric_scores_json=rubric.model_dump_json(),
+                passed=rubric.overall >= _PASS_THRESHOLD,
+                difficulty=input_data.target_difficulty,
+            )
+        else:
+            new_card = None
+            memory_summary = ""
+            logger.info(
+                "memory_extraction_skipped",
+                reason=str(flag),
+                voice_session_id=input_data.voice_session_id,
+            )
 
     return VoiceAdaptiveOutput(
         session_id=input_data.session_id,

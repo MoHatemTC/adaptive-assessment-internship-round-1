@@ -12,7 +12,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.shared.schemas.memory import DifficultyLevel
+from app.shared.schemas.memory import DifficultyLevel, MemoryCardCreate
 
 
 class VoiceSessionCreate(BaseModel):
@@ -104,6 +104,33 @@ class VoiceSessionStatus(BaseModel):
     elapsed_seconds: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CommunicationSignals(BaseModel):
+    """Voice-specific communication quality signals."""
+
+    clarity: bool = False  # response was clear and well-articulated
+    fluency: bool = False  # natural speech flow, minimal hesitation
+    confidence: bool = False  # spoke with conviction, no excessive hedging
+    structure: bool = False  # organized response with logical flow
+
+
+class VoiceMemoryCardCreate(MemoryCardCreate):
+    """Extended memory card for voice interviews.
+
+    Adds voice-specific fields on top of the platform base schema.
+    competency, rubric_scores, and communication_signals are scoped
+    to the voice slice and never written to the shared memory_cards table.
+    """
+
+    competency: str = ""
+    # The specific skill or knowledge area demonstrated in this response
+    rubric_scores_json: str = "{}"
+    # JSON-serialized RubricScores from the LLM grader
+    communication_signals: CommunicationSignals = Field(
+        default_factory=CommunicationSignals
+    )
+    # Voice-specific signals derived from STT confidence and transcript quality
 
 
 #: Reason a voice transcript was excluded from grading. Checked in priority
@@ -210,4 +237,29 @@ class VoiceAdaptiveOutput(BaseModel):
     grade_result_id: Optional[int] = None
     memory_card_id: Optional[int] = None
     memory_summary: str = ""
+    adaptive_contract: Optional[dict] = None
+
+
+class VoiceAdaptivePublicResponse(BaseModel):
+    """Public-facing response from the adaptive loop.
+
+    All internal grading signals, memory summaries, and scoring data are
+    excluded. Only next-question navigation data is exposed. The learner never
+    sees transcript, scores, memory_summary, confidence, grade_result_id,
+    memory_card_id, or flag_reason.
+
+    Attributes:
+        session_id: Owning assessment session identifier.
+        voice_session_id: Surrogate primary key of the voice session.
+        question_index: Zero-based position in the assessment blueprint.
+        flagged: Whether the response was excluded from grading (no reason given).
+        adaptive_contract: Learner-facing next-question navigation only
+            (next question text, difficulty, follow-up depth, stop). All internal
+            grading fields are stripped before this crosses the API boundary.
+    """
+
+    session_id: str
+    voice_session_id: int
+    question_index: int
+    flagged: bool
     adaptive_contract: Optional[dict] = None

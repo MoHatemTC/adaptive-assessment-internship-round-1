@@ -31,7 +31,7 @@ from app.core.deps import get_db
 from app.core.logging import get_logger
 from app.features.voice.schemas import (
     VoiceAdaptiveInput,
-    VoiceAdaptiveOutput,
+    VoiceAdaptivePublicResponse,
     VoiceSessionComplete,
     VoiceSessionCreate,
     VoiceSessionRead,
@@ -294,24 +294,27 @@ async def start_adaptive_voice_session(
 
 @router.post(
     "/adaptive/sessions/{voice_session_id}/process",
-    response_model=VoiceAdaptiveOutput,
+    response_model=VoiceAdaptivePublicResponse,
 )
 async def process_voice_session(
     voice_session_id: int,
     payload: VoiceAdaptiveInput,
-) -> VoiceAdaptiveOutput:
+) -> VoiceAdaptivePublicResponse:
     """Run the full adaptive loop for a completed voice session.
 
     Call this after the WebSocket sends ``session_complete``. Returns the next
-    question embedded in ``adaptive_contract``. Grading is silent — no scores
-    or correctness signals are included in the response.
+    question embedded in ``adaptive_contract``. Grading is silent — the internal
+    :class:`VoiceAdaptiveOutput` (scores, transcript, memory summary, flag
+    reason) never crosses this boundary; only learner-facing navigation data is
+    returned via :class:`VoiceAdaptivePublicResponse`.
 
     Args:
         voice_session_id: Primary key of the voice session to process.
         payload: The adaptive evaluation request.
 
     Returns:
-        The evaluation output with ``adaptive_contract`` populated.
+        The public response with a sanitized ``adaptive_contract`` (next question
+        text, difficulty, follow-up depth, stop) and no grading signals.
 
     Raises:
         HTTPException: 422 if ``voice_session_id`` in path does not match body.
@@ -325,7 +328,29 @@ async def process_voice_session(
         )
     from app.features.voice.loop import run_voice_adaptive_loop
 
-    return await run_voice_adaptive_loop(payload)
+    full_output = await run_voice_adaptive_loop(payload)
+
+    # Strip every internal grading signal before crossing the API boundary.
+    # The full contract carries memory_summary, focus_dimension, and
+    # cumulative_scores; the learner only ever receives navigation data.
+    public_contract = None
+    if full_output.adaptive_contract is not None:
+        contract = full_output.adaptive_contract
+        public_contract = {
+            "question_index": contract.get("question_index"),
+            "next_question_text": contract.get("next_question_text"),
+            "difficulty": contract.get("difficulty"),
+            "follow_up_depth": contract.get("follow_up_depth"),
+            "stop": contract.get("stop"),
+        }
+
+    return VoiceAdaptivePublicResponse(
+        session_id=full_output.session_id,
+        voice_session_id=full_output.voice_session_id,
+        question_index=full_output.question_index,
+        flagged=full_output.flagged,
+        adaptive_contract=public_contract,
+    )
 
 
 @router.get("/adaptive/sessions/{session_id}/analysis")

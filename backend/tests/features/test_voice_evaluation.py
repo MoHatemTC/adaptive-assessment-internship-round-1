@@ -222,3 +222,92 @@ async def test_evaluate_clean_response_grades_and_stores(voice_adaptive_input):
     assert result.memory_card_id == 7
     assert result.memory_summary == "Strong API knowledge demonstrated."
     mock_llm.ainvoke.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — flagged session skips memory extraction entirely
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_flagged_session_skips_memory_extraction(voice_adaptive_input):
+    voice_session = MagicMock()
+    voice_session.id = 1
+    voice_session.status = "timed_out"
+
+    async def _refresh(obj: object) -> None:
+        obj.id = 10  # type: ignore[attr-defined]
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=voice_session)
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    mock_db.refresh = AsyncMock(side_effect=_refresh)
+
+    mock_memory_agent = AsyncMock(return_value=(MagicMock(), "should never appear"))
+
+    with (
+        patch(f"{_EVAL}.async_session", return_value=_make_session_mock(mock_db)),
+        patch(f"{_EVAL}.get_transcript_text", AsyncMock(return_value=("", 0.0))),
+        patch(f"{_EVAL}.run_memory_agent", mock_memory_agent),
+    ):
+        result = await evaluate_voice_response(voice_adaptive_input)
+
+    mock_memory_agent.assert_not_called()
+    assert result.memory_summary == ""
+    assert result.memory_card_id is None
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — communication signals computed on a clean transcript
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_communication_signals_computed_on_clean_transcript(
+    voice_adaptive_input,
+):
+    voice_session = MagicMock()
+    voice_session.id = 1
+    voice_session.status = "completed"
+
+    mock_db = AsyncMock()
+    mock_db.get = AsyncMock(return_value=voice_session)
+
+    # A 35-word transcript so the structure signal (>= 30 words) is engaged.
+    transcript = " ".join(f"word{i}" for i in range(35))
+
+    rubric_json = json.dumps(
+        {
+            "dimensions": [
+                {"name": "thinking", "score": 0.8, "feedback": "Clear reasoning."},
+                {"name": "soft", "score": 0.7, "feedback": "Well articulated."},
+                {"name": "work", "score": 0.7, "feedback": "Concrete design."},
+                {"name": "growth", "score": 0.6, "feedback": "Open to iteration."},
+            ],
+            "overall": 0.75,
+        }
+    )
+    mock_response = MagicMock()
+    mock_response.content = rubric_json
+    mock_llm = AsyncMock()
+    mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+    mock_card = MagicMock()
+    mock_card.id = 5
+
+    with (
+        patch(f"{_EVAL}.async_session", return_value=_make_session_mock(mock_db)),
+        patch(
+            f"{_EVAL}.get_transcript_text",
+            AsyncMock(return_value=(transcript, 0.80)),
+        ),
+        patch(f"{_EVAL}.get_llm", return_value=mock_llm),
+        patch(f"{_EVAL}._write_grade_result", AsyncMock(return_value=1)),
+        patch(
+            f"{_EVAL}.run_memory_agent",
+            AsyncMock(return_value=(mock_card, "summary")),
+        ),
+    ):
+        result = await evaluate_voice_response(voice_adaptive_input)
+
+    assert result.flagged is False
+    assert result.average_confidence == 0.80

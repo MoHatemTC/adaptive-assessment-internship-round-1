@@ -201,3 +201,43 @@ async def test_generate_next_question_fallback_on_llm_failure(analysis_result):
     assert isinstance(question_text, str)
     assert len(question_text) > 10
     assert next_diff in ["beginner", "intermediate", "advanced"]
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — cold start (no memory cards yet) yields low mastery
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cold_start_returns_low_mastery():
+    mock_db = _cards_db([])
+
+    with patch(f"{_ANALYSIS}.async_session", return_value=_make_session_mock(mock_db)):
+        result = await analyze_voice_session("cold-start-session", 0)
+
+    assert result["mastery_level"] == "low"
+    assert result["total_cards"] == 0
+    assert result["weakest_dimension"] is None
+    assert result["prior_questions"] == []
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — difficulty selection respects floor and admin ceiling
+# ---------------------------------------------------------------------------
+
+def test_difficulty_bounds_respected():
+    # Min bound: already at beginner with low mastery — cannot go below.
+    assert _select_next_difficulty("beginner", "low", {}) == "beginner"
+    # Max bound: admin caps at intermediate, high mastery from advanced.
+    assert (
+        _select_next_difficulty(
+            "advanced", "high", {"max_difficulty": "intermediate"}
+        )
+        == "intermediate"
+    )
+    # Max bound: already at admin max with high mastery — stays at max.
+    assert (
+        _select_next_difficulty(
+            "intermediate", "high", {"max_difficulty": "intermediate"}
+        )
+        == "intermediate"
+    )
