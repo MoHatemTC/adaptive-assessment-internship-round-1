@@ -9,10 +9,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.features.code.schemas import ExecutionOutcome
+from app.features.code import tool
+from app.features.code.schemas import AdaptiveSubmitResponse, ExecutionOutcome
 from app.features.code.schemas import TestCaseDTO as CodeTestCaseDTO
 from app.features.code.schemas import TestCaseResult as CodeTestCaseResult
-from app.features.code import tool
+from app.shared.schemas.memory import AdaptiveContract, DimensionScore
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "code"
 
@@ -94,7 +95,13 @@ class TestToolExecution:
         with patch.dict(os.environ, {}, clear=True):
             outcome, results, error = await tool.execute_submission(
                 "def solution(s): return s",
-                [CodeTestCaseDTO(id="1", input="print(solution('a'))", expected_output="a")],
+                [
+                    CodeTestCaseDTO(
+                        id="1",
+                        input="print(solution('a'))",
+                        expected_output="a",
+                    )
+                ],
             )
         assert outcome == ExecutionOutcome.SANDBOX_UNAVAILABLE
         assert results == []
@@ -162,6 +169,55 @@ class TestToolExecution:
         assert error is not None
 
     @pytest.mark.asyncio
+    async def test_command_timeout_is_bounded_and_reported(self):
+        mock_sandbox = MagicMock()
+        mock_sandbox.files.write = MagicMock()
+        mock_sandbox.commands.run = MagicMock(
+            side_effect=TimeoutError("command timed out")
+        )
+        mock_sandbox.kill = MagicMock()
+
+        cases = [CodeTestCaseDTO(id="1", input="x", expected_output="y")]
+        with patch.dict(os.environ, {"E2B_API_KEY": "test-key"}):
+            with patch("e2b_code_interpreter.Sandbox.create", return_value=mock_sandbox):
+                outcome, results, error = await tool.execute_submission(
+                    "while True: pass",
+                    cases,
+                    timeout_seconds=1,
+                )
+
+        assert outcome == ExecutionOutcome.SANDBOX_TIMEOUT
+        assert len(results) == 1
+        assert results[0].passed is False
+        assert error is not None
+        mock_sandbox.kill.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cold_start_timeout_is_reported(self):
+        cases = [
+            CodeTestCaseDTO(
+                id="1",
+                input="print(solution())",
+                expected_output="ok",
+            )
+        ]
+        with patch.dict(os.environ, {"E2B_API_KEY": "test-key"}):
+            with patch(
+                "e2b_code_interpreter.Sandbox.create",
+                side_effect=TimeoutError("sandbox cold start timeout"),
+            ):
+                outcome, results, error = await tool.execute_submission(
+                    "def solution(): return 'ok'",
+                    cases,
+                    timeout_seconds=1,
+                )
+
+        assert outcome == ExecutionOutcome.SANDBOX_TIMEOUT
+        assert results
+        assert results[0].passed is False
+        assert error is not None
+
+    @pytest.mark.asyncio
     async def test_partial_solution_mocked(self):
         fixture = load_fixture("reverse_string.json")
         raw = [
@@ -221,6 +277,62 @@ class TestToolExecution:
         assert outcome == ExecutionOutcome.SUCCESS
         score = tool.compute_weighted_score(cases, results)
         assert score < tool.PASS_THRESHOLD
+
+
+class TestCodeBaseTool:
+    @pytest.mark.asyncio
+    async def test_code_tool_returns_silent_structured_output(self, monkeypatch):
+        contract = AdaptiveContract(
+            session_id="session-1",
+            question_index=1,
+            tool_type="coding",
+            difficulty="intermediate",
+            focus_dimension="thinking",
+            stop=False,
+            memory_summary="",
+            cumulative_scores=DimensionScore(),
+        )
+
+        async def _fake_adaptive_submit(db, payload):
+            assert payload.session_id == "session-1"
+            return AdaptiveSubmitResponse(
+                submission_id=42,
+                passed=None,
+                score=None,
+                llm_rubric=None,
+                contract=contract,
+                next_challenge=None,
+            )
+
+        class _Session:
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        monkeypatch.setattr(tool, "async_session", lambda: _Session())
+        from app.features.code import service
+
+        monkeypatch.setattr(service, "adaptive_submit", _fake_adaptive_submit)
+
+        graph = tool.CodeTool().build_graph()
+        result = await graph.ainvoke(
+            {
+                "challenge_id": 7,
+                "session_id": "session-1",
+                "assessment_id": "assessment-1",
+                "submitted_code": "def solution(): pass",
+                "question_index": 0,
+                "difficulty": "beginner",
+            }
+        )
+
+        assert result["received"] is True
+        assert result["submission_id"] == 42
+        assert result["contract"]["difficulty"] == "intermediate"
+        assert "score" not in result
+        assert "llm_rubric" not in result
 
 
 class TestAPI:
@@ -318,7 +430,7 @@ class TestE2BIntegration:
     async def test_reverse_string_live(self):
         fixture = load_fixture("reverse_string.json")
         cases = [
-            TestCaseDTO(id=str(i), **tc)
+            CodeTestCaseDTO(id=str(i), **tc)
             for i, tc in enumerate(fixture["test_cases"], start=1)
         ]
         outcome, results, error = await tool.execute_submission(

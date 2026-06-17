@@ -7,11 +7,9 @@ import { SandboxResultsPanel } from "@/features/code/SandboxResultsPanel";
 import {
   createAdaptiveCodeSubmission,
   createCodeSubmission,
-  getCodeSubmission,
   type AdaptiveContract,
   type ChallengeRead,
   type DifficultyLevel,
-  type LlmRubricSummary,
   type SubmissionRead,
 } from "@/lib/api";
 
@@ -32,90 +30,8 @@ export interface CodeEditorProps {
   difficulty: DifficultyLevel;
   disabled?: boolean;
   onSubmitted?: (result: {
-    submission: SubmissionRead;
     contract: AdaptiveContract;
-    llmRubric: LlmRubricSummary | null;
   }) => void;
-}
-
-function LlmRubricPanel({ rubric }: { rubric: LlmRubricSummary }) {
-  return (
-    <div className="rounded-lg border border-secondary/15 bg-surface-muted p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-secondary">
-        LLM rubric (approach &amp; efficiency)
-      </p>
-      <p className="mt-2 text-sm font-medium text-neutral">
-        Overall qualitative score: {(rubric.overall * 100).toFixed(0)}%
-      </p>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-md bg-white p-3 text-sm shadow-sm">
-          <p className="font-medium text-neutral">
-            Approach ({(rubric.approach_score * 100).toFixed(0)}%)
-          </p>
-          <p className="mt-1 text-neutral/80">{rubric.approach_feedback}</p>
-        </div>
-        <div className="rounded-md bg-white p-3 text-sm shadow-sm">
-          <p className="font-medium text-neutral">
-            Efficiency ({(rubric.efficiency_score * 100).toFixed(0)}%)
-          </p>
-          <p className="mt-1 text-neutral/80">{rubric.efficiency_feedback}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ContractPanel({ contract }: { contract: AdaptiveContract }) {
-  const scores = contract.cumulative_scores;
-  const engaged = (
-    [
-      ["thinking", scores.thinking],
-      ["work", scores.work],
-      ["digital_ai", scores.digital_ai],
-    ] as const
-  ).filter(([, value]) => value != null);
-
-  return (
-    <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-primary">
-        Adaptive contract (LLM loop)
-      </p>
-      {contract.stop ? (
-        <p className="mt-2 text-sm font-medium text-neutral">
-          Session complete — no further coding questions.
-        </p>
-      ) : (
-        <p className="mt-2 text-sm text-neutral">
-          Next question:{" "}
-          <span className="font-medium capitalize">{contract.difficulty}</span>
-          {contract.focus_dimension && (
-            <>
-              {" "}
-              · focus{" "}
-              <span className="font-medium">
-                {contract.focus_dimension.replace("_", " ")}
-              </span>
-            </>
-          )}
-        </p>
-      )}
-      {contract.memory_summary && (
-        <p className="mt-2 text-sm text-neutral/80">{contract.memory_summary}</p>
-      )}
-      {engaged.length > 0 && (
-        <ul className="mt-3 flex flex-wrap gap-2 text-xs">
-          {engaged.map(([name, value]) => (
-            <li
-              key={name}
-              className="rounded-full bg-white px-2.5 py-1 font-medium text-neutral shadow-sm"
-            >
-              {name.replace("_", " ")}: {value}/10
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
 }
 
 export function CodeEditor({
@@ -132,9 +48,7 @@ export function CodeEditor({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<SubmissionRead | null>(null);
-  const [submitResult, setSubmitResult] = useState<SubmissionRead | null>(null);
-  const [contract, setContract] = useState<AdaptiveContract | null>(null);
-  const [llmRubric, setLlmRubric] = useState<LlmRubricSummary | null>(null);
+  const [submitRecorded, setSubmitRecorded] = useState(false);
 
   const busy = runningTests || submitting;
 
@@ -159,9 +73,7 @@ export function CodeEditor({
   const handleSubmit = useCallback(async () => {
     setSubmitting(true);
     setError(null);
-    setContract(null);
-    setLlmRubric(null);
-    setSubmitResult(null);
+    setSubmitRecorded(false);
     try {
       const adaptive = await createAdaptiveCodeSubmission({
         challenge_id: challenge.id,
@@ -171,15 +83,8 @@ export function CodeEditor({
         question_index: questionIndex,
         difficulty,
       });
-      const submission = await getCodeSubmission(adaptive.submission_id);
-      setSubmitResult(submission);
-      setContract(adaptive.contract);
-      setLlmRubric(adaptive.llm_rubric);
-      onSubmitted?.({
-        submission,
-        contract: adaptive.contract,
-        llmRubric: adaptive.llm_rubric,
-      });
+      setSubmitRecorded(true);
+      onSubmitted?.({ contract: adaptive.contract });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Submission failed");
     } finally {
@@ -247,7 +152,7 @@ export function CodeEditor({
 
       <p className="text-xs text-neutral/50">
         Run tests executes the E2B sandbox only (practice, no LLM grading). Submit
-        answer records your response and runs the full adaptive loop.
+        answer records your response and prepares the next challenge silently.
       </p>
 
       {testResult && (
@@ -258,17 +163,12 @@ export function CodeEditor({
         />
       )}
 
-      {submitResult && (
-        <SandboxResultsPanel
-          result={submitResult}
-          title="Submitted answer"
-          subtitle="Sandbox score for your official submission."
-        />
+      {submitRecorded && (
+        <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-primary">
+          Answer recorded. Your assessment details are saved privately while the
+          next challenge is prepared.
+        </p>
       )}
-
-      {llmRubric && <LlmRubricPanel rubric={llmRubric} />}
-
-      {contract && <ContractPanel contract={contract} />}
     </div>
   );
 }
