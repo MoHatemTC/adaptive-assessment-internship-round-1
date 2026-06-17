@@ -71,4 +71,4 @@ graphify.md
 graphify-out/
 
 # ── uv (for local tests) ──────────────────────────────────────────────
-uv.lock
+uv.lock*.zip

@@ -31,6 +31,10 @@ class VoiceSession(Base):
         status: Lifecycle state, one of ``"pending"``, ``"active"``, or
             ``"completed"``. Defaults to ``"pending"`` server-side.
         time_limit_seconds: Maximum interview duration in seconds.
+        question_text: The interview question posed for this session, or ``None``
+            for legacy rows created before adaptive columns existed.
+        question_index: Zero-based position of the question in the assessment
+            blueprint, or ``None`` for legacy rows.
         started_at: Timestamp the interview became active, or ``None`` if it has
             not started yet.
         ended_at: Timestamp the interview finished, or ``None`` while running.
@@ -46,6 +50,9 @@ class VoiceSession(Base):
         String(20), nullable=False, server_default="pending"
     )
     time_limit_seconds: Mapped[int] = mapped_column(nullable=False)
+    # Adaptive loop context — nullable so pre-existing rows are preserved.
+    question_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    question_index: Mapped[int | None] = mapped_column(nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

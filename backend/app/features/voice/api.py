@@ -30,9 +30,13 @@ from app.core.database import async_session
 from app.core.deps import get_db
 from app.core.logging import get_logger
 from app.features.voice.schemas import (
+    VoiceAdaptiveInput,
+    VoiceAdaptiveOutput,
     VoiceSessionComplete,
     VoiceSessionCreate,
     VoiceSessionRead,
+    VoiceSessionStart,
+    VoiceSessionStartResponse,
     VoiceTranscriptChunk,
 )
 from app.features.voice.service import (
@@ -237,3 +241,113 @@ async def end_voice_interview(
         final_transcript=final_transcript,
         duration_seconds=duration_seconds,
     )
+
+
+@router.post("/adaptive/sessions", response_model=VoiceSessionStartResponse)
+async def start_adaptive_voice_session(
+    payload: VoiceSessionStart,
+    db: AsyncSession = Depends(get_db),
+) -> VoiceSessionStartResponse:
+    """Create a new voice session for the adaptive loop.
+
+    Call this to obtain a ``voice_session_id`` before opening the WebSocket
+    recording stream.
+
+    Args:
+        payload: The adaptive session start request.
+        db: Async database session dependency.
+
+    Returns:
+        The new session's id, question, time limit, and initial status.
+    """
+    from app.features.voice.models import VoiceSession
+
+    new_session = VoiceSession(
+        # FK deferred until assessment_sessions table exists
+        session_id=payload.session_id,
+        question_text=(
+            payload.question_text
+            if hasattr(VoiceSession, "question_text")
+            else None
+        ),
+        question_index=(
+            payload.question_index
+            if hasattr(VoiceSession, "question_index")
+            else None
+        ),
+        time_limit_seconds=payload.time_limit_seconds,
+        status="pending",
+    )
+    db.add(new_session)
+    await db.commit()
+    await db.refresh(new_session)
+    _logger.info("adaptive_session_created", voice_session_id=new_session.id)
+    return VoiceSessionStartResponse(
+        voice_session_id=new_session.id,
+        session_id=payload.session_id,
+        question_text=payload.question_text,
+        question_index=payload.question_index,
+        time_limit_seconds=payload.time_limit_seconds,
+        status="pending",
+    )
+
+
+@router.post(
+    "/adaptive/sessions/{voice_session_id}/process",
+    response_model=VoiceAdaptiveOutput,
+)
+async def process_voice_session(
+    voice_session_id: int,
+    payload: VoiceAdaptiveInput,
+) -> VoiceAdaptiveOutput:
+    """Run the full adaptive loop for a completed voice session.
+
+    Call this after the WebSocket sends ``session_complete``. Returns the next
+    question embedded in ``adaptive_contract``. Grading is silent — no scores
+    or correctness signals are included in the response.
+
+    Args:
+        voice_session_id: Primary key of the voice session to process.
+        payload: The adaptive evaluation request.
+
+    Returns:
+        The evaluation output with ``adaptive_contract`` populated.
+
+    Raises:
+        HTTPException: 422 if ``voice_session_id`` in path does not match body.
+    """
+    from fastapi import HTTPException
+
+    if payload.voice_session_id != voice_session_id:
+        raise HTTPException(
+            status_code=422,
+            detail="voice_session_id mismatch between path and body",
+        )
+    from app.features.voice.loop import run_voice_adaptive_loop
+
+    return await run_voice_adaptive_loop(payload)
+
+
+@router.get("/adaptive/sessions/{session_id}/analysis")
+async def get_session_analysis(session_id: str) -> dict:
+    """Return the current analysis state for a session.
+
+    Exposes only mastery level and dimension focus — no raw scores are returned.
+
+    Args:
+        session_id: Owning assessment session identifier.
+
+    Returns:
+        A summary dict with total voice questions answered, mastery level,
+        recommended focus dimension, and recommended probing depth.
+    """
+    from app.features.voice.analysis import analyze_voice_session
+
+    analysis = await analyze_voice_session(session_id, current_question_index=0)
+    return {
+        "session_id": session_id,
+        "total_voice_questions": analysis["total_cards"],
+        "mastery_level": analysis["mastery_level"],
+        "focus_dimension": analysis.get("weakest_dimension"),
+        "recommended_depth": analysis.get("recommended_follow_up_depth"),
+    }

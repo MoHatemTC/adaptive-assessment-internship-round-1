@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from importlib import import_module
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -127,6 +128,14 @@ def create_app() -> FastAPI:
     configure_logging()
 
     app = FastAPI(title="Masaar API", version="0.1.0", lifespan=lifespan)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000", "http://localhost:3001"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     setup_middleware(app)
 
