@@ -3,8 +3,10 @@
 import dynamic from "next/dynamic";
 import { useCallback, useState } from "react";
 
+import { SandboxResultsPanel } from "@/features/code/SandboxResultsPanel";
 import {
   createAdaptiveCodeSubmission,
+  createCodeSubmission,
   getCodeSubmission,
   type AdaptiveContract,
   type ChallengeRead,
@@ -34,11 +36,6 @@ export interface CodeEditorProps {
     contract: AdaptiveContract;
     llmRubric: LlmRubricSummary | null;
   }) => void;
-}
-
-function formatScore(score: number | null | undefined): string {
-  if (score == null) return "—";
-  return `${(score * 100).toFixed(0)}%`;
 }
 
 function LlmRubricPanel({ rubric }: { rubric: LlmRubricSummary }) {
@@ -131,17 +128,40 @@ export function CodeEditor({
   onSubmitted,
 }: CodeEditorProps) {
   const [code, setCode] = useState(challenge.starter_code);
-  const [loading, setLoading] = useState(false);
+  const [runningTests, setRunningTests] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<SubmissionRead | null>(null);
+  const [testResult, setTestResult] = useState<SubmissionRead | null>(null);
+  const [submitResult, setSubmitResult] = useState<SubmissionRead | null>(null);
   const [contract, setContract] = useState<AdaptiveContract | null>(null);
   const [llmRubric, setLlmRubric] = useState<LlmRubricSummary | null>(null);
 
+  const busy = runningTests || submitting;
+
+  const handleRunTests = useCallback(async () => {
+    setRunningTests(true);
+    setError(null);
+    setTestResult(null);
+    try {
+      const submission = await createCodeSubmission({
+        challenge_id: challenge.id,
+        session_id: sessionId,
+        submitted_code: code,
+      });
+      setTestResult(submission);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Test run failed");
+    } finally {
+      setRunningTests(false);
+    }
+  }, [challenge.id, code, sessionId]);
+
   const handleSubmit = useCallback(async () => {
-    setLoading(true);
+    setSubmitting(true);
     setError(null);
     setContract(null);
     setLlmRubric(null);
+    setSubmitResult(null);
     try {
       const adaptive = await createAdaptiveCodeSubmission({
         challenge_id: challenge.id,
@@ -152,7 +172,7 @@ export function CodeEditor({
         difficulty,
       });
       const submission = await getCodeSubmission(adaptive.submission_id);
-      setResult(submission);
+      setSubmitResult(submission);
       setContract(adaptive.contract);
       setLlmRubric(adaptive.llm_rubric);
       onSubmitted?.({
@@ -163,7 +183,7 @@ export function CodeEditor({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Submission failed");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   }, [
     assessmentId,
@@ -181,8 +201,7 @@ export function CodeEditor({
         <h2 className="text-lg font-semibold text-neutral">{challenge.title}</h2>
         <p className="mt-1 text-sm text-neutral/80">{challenge.description}</p>
         <p className="mt-2 text-xs text-neutral/60">
-          Question {questionIndex + 1} · {difficulty} · runs E2B sandbox + LLM
-          grading
+          Question {questionIndex + 1} · {difficulty}
         </p>
       </div>
 
@@ -202,14 +221,22 @@ export function CodeEditor({
         />
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={handleRunTests}
+          disabled={busy || disabled || !code.trim()}
+          className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-neutral transition hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {runningTests ? "Running tests…" : "Run tests"}
+        </button>
         <button
           type="button"
           onClick={handleSubmit}
-          disabled={loading || disabled || !code.trim()}
+          disabled={busy || disabled || !code.trim()}
           className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-60 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? "Running sandbox + LLM loop…" : "Submit (adaptive)"}
+          {submitting ? "Submitting…" : "Submit answer"}
         </button>
         {error && (
           <p className="text-sm text-error" role="alert">
@@ -218,74 +245,25 @@ export function CodeEditor({
         )}
       </div>
 
-      {result && (
-        <div
-          className={`rounded-lg border p-4 ${
-            result.passed
-              ? "border-success/30 bg-success/5"
-              : "border-error/30 bg-error/5"
-          }`}
-        >
-          <div className="flex flex-wrap items-center gap-3">
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                result.passed
-                  ? "bg-success/15 text-success"
-                  : "bg-error/15 text-error"
-              }`}
-            >
-              {result.passed ? "Passed" : "Failed"}
-            </span>
-            <span className="text-sm font-medium">
-              Sandbox score: {formatScore(result.score)}
-            </span>
-            <span className="text-sm text-neutral/70">
-              {result.passed_tests}/{result.total_tests} tests passed
-            </span>
-          </div>
+      <p className="text-xs text-neutral/50">
+        Run tests executes the E2B sandbox only (practice, no LLM grading). Submit
+        answer records your response and runs the full adaptive loop.
+      </p>
 
-          {result.error && (
-            <p className="mt-2 text-sm text-error">{result.error}</p>
-          )}
+      {testResult && (
+        <SandboxResultsPanel
+          result={testResult}
+          title="Practice run"
+          subtitle="Sandbox only — not counted toward your adaptive session."
+        />
+      )}
 
-          {result.test_results.length > 0 && (
-            <div className="mt-4 space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-neutral/60">
-                Visible test results
-              </p>
-              {result.test_results
-                .filter((tc) => tc.expected_output || tc.error)
-                .map((tc) => (
-                  <div
-                    key={tc.test_case_id}
-                    className="rounded-md border border-border bg-white p-2 text-xs"
-                  >
-                    <span
-                      className={
-                        tc.passed ? "text-success font-medium" : "text-error font-medium"
-                      }
-                    >
-                      Test {tc.test_case_id}: {tc.passed ? "pass" : "fail"}
-                    </span>
-                    {!tc.passed && tc.expected_output && (
-                      <p className="mt-1 text-neutral/70">
-                        Expected: <code>{tc.expected_output}</code>
-                        {tc.actual_output && (
-                          <>
-                            {" "}
-                            · Got: <code>{tc.actual_output}</code>
-                          </>
-                        )}
-                      </p>
-                    )}
-                    {tc.error && (
-                      <pre className="mt-1 overflow-x-auto text-error">{tc.error}</pre>
-                    )}
-                  </div>
-                ))}
-            </div>
-          )}
-        </div>
+      {submitResult && (
+        <SandboxResultsPanel
+          result={submitResult}
+          title="Submitted answer"
+          subtitle="Sandbox score for your official submission."
+        />
       )}
 
       {llmRubric && <LlmRubricPanel rubric={llmRubric} />}
