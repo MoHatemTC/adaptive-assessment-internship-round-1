@@ -4,8 +4,12 @@ import dynamic from "next/dynamic";
 import { useCallback, useState } from "react";
 
 import {
-  createCodeSubmission,
+  createAdaptiveCodeSubmission,
+  getCodeSubmission,
+  type AdaptiveContract,
   type ChallengeRead,
+  type DifficultyLevel,
+  type LlmRubricSummary,
   type SubmissionRead,
 } from "@/lib/api";
 
@@ -21,38 +25,165 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 export interface CodeEditorProps {
   challenge: ChallengeRead;
   sessionId: string;
-  onSubmitted?: (result: SubmissionRead) => void;
+  assessmentId: string;
+  questionIndex: number;
+  difficulty: DifficultyLevel;
+  disabled?: boolean;
+  onSubmitted?: (result: {
+    submission: SubmissionRead;
+    contract: AdaptiveContract;
+    llmRubric: LlmRubricSummary | null;
+  }) => void;
 }
 
-export function CodeEditor({ challenge, sessionId, onSubmitted }: CodeEditorProps) {
+function formatScore(score: number | null | undefined): string {
+  if (score == null) return "—";
+  return `${(score * 100).toFixed(0)}%`;
+}
+
+function LlmRubricPanel({ rubric }: { rubric: LlmRubricSummary }) {
+  return (
+    <div className="rounded-lg border border-secondary/15 bg-surface-muted p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-secondary">
+        LLM rubric (approach &amp; efficiency)
+      </p>
+      <p className="mt-2 text-sm font-medium text-neutral">
+        Overall qualitative score: {(rubric.overall * 100).toFixed(0)}%
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-md bg-white p-3 text-sm shadow-sm">
+          <p className="font-medium text-neutral">
+            Approach ({(rubric.approach_score * 100).toFixed(0)}%)
+          </p>
+          <p className="mt-1 text-neutral/80">{rubric.approach_feedback}</p>
+        </div>
+        <div className="rounded-md bg-white p-3 text-sm shadow-sm">
+          <p className="font-medium text-neutral">
+            Efficiency ({(rubric.efficiency_score * 100).toFixed(0)}%)
+          </p>
+          <p className="mt-1 text-neutral/80">{rubric.efficiency_feedback}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ContractPanel({ contract }: { contract: AdaptiveContract }) {
+  const scores = contract.cumulative_scores;
+  const engaged = (
+    [
+      ["thinking", scores.thinking],
+      ["work", scores.work],
+      ["digital_ai", scores.digital_ai],
+    ] as const
+  ).filter(([, value]) => value != null);
+
+  return (
+    <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+        Adaptive contract (LLM loop)
+      </p>
+      {contract.stop ? (
+        <p className="mt-2 text-sm font-medium text-neutral">
+          Session complete — no further coding questions.
+        </p>
+      ) : (
+        <p className="mt-2 text-sm text-neutral">
+          Next question:{" "}
+          <span className="font-medium capitalize">{contract.difficulty}</span>
+          {contract.focus_dimension && (
+            <>
+              {" "}
+              · focus{" "}
+              <span className="font-medium">
+                {contract.focus_dimension.replace("_", " ")}
+              </span>
+            </>
+          )}
+        </p>
+      )}
+      {contract.memory_summary && (
+        <p className="mt-2 text-sm text-neutral/80">{contract.memory_summary}</p>
+      )}
+      {engaged.length > 0 && (
+        <ul className="mt-3 flex flex-wrap gap-2 text-xs">
+          {engaged.map(([name, value]) => (
+            <li
+              key={name}
+              className="rounded-full bg-white px-2.5 py-1 font-medium text-neutral shadow-sm"
+            >
+              {name.replace("_", " ")}: {value}/10
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export function CodeEditor({
+  challenge,
+  sessionId,
+  assessmentId,
+  questionIndex,
+  difficulty,
+  disabled = false,
+  onSubmitted,
+}: CodeEditorProps) {
   const [code, setCode] = useState(challenge.starter_code);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SubmissionRead | null>(null);
+  const [contract, setContract] = useState<AdaptiveContract | null>(null);
+  const [llmRubric, setLlmRubric] = useState<LlmRubricSummary | null>(null);
 
   const handleSubmit = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setContract(null);
+    setLlmRubric(null);
     try {
-      const submission = await createCodeSubmission({
+      const adaptive = await createAdaptiveCodeSubmission({
         challenge_id: challenge.id,
         session_id: sessionId,
+        assessment_id: assessmentId,
         submitted_code: code,
+        question_index: questionIndex,
+        difficulty,
       });
+      const submission = await getCodeSubmission(adaptive.submission_id);
       setResult(submission);
-      onSubmitted?.(submission);
+      setContract(adaptive.contract);
+      setLlmRubric(adaptive.llm_rubric);
+      onSubmitted?.({
+        submission,
+        contract: adaptive.contract,
+        llmRubric: adaptive.llm_rubric,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Submission failed");
     } finally {
       setLoading(false);
     }
-  }, [challenge.id, code, onSubmitted, sessionId]);
+  }, [
+    assessmentId,
+    challenge.id,
+    code,
+    difficulty,
+    onSubmitted,
+    questionIndex,
+    sessionId,
+  ]);
 
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-border bg-white p-4 shadow-sm">
       <div>
         <h2 className="text-lg font-semibold text-neutral">{challenge.title}</h2>
         <p className="mt-1 text-sm text-neutral/80">{challenge.description}</p>
+        <p className="mt-2 text-xs text-neutral/60">
+          Question {questionIndex + 1} · {difficulty} · runs E2B sandbox + LLM
+          grading
+        </p>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-border">
@@ -75,10 +206,10 @@ export function CodeEditor({ challenge, sessionId, onSubmitted }: CodeEditorProp
         <button
           type="button"
           onClick={handleSubmit}
-          disabled={loading || !code.trim()}
+          disabled={loading || disabled || !code.trim()}
           className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-60 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? "Running…" : "Run / Submit"}
+          {loading ? "Running sandbox + LLM loop…" : "Submit (adaptive)"}
         </button>
         {error && (
           <p className="text-sm text-error" role="alert">
@@ -106,7 +237,7 @@ export function CodeEditor({ challenge, sessionId, onSubmitted }: CodeEditorProp
               {result.passed ? "Passed" : "Failed"}
             </span>
             <span className="text-sm font-medium">
-              Score: {((result.score ?? 0) * 100).toFixed(0)}%
+              Sandbox score: {formatScore(result.score)}
             </span>
             <span className="text-sm text-neutral/70">
               {result.passed_tests}/{result.total_tests} tests passed
@@ -115,17 +246,6 @@ export function CodeEditor({ challenge, sessionId, onSubmitted }: CodeEditorProp
 
           {result.error && (
             <p className="mt-2 text-sm text-error">{result.error}</p>
-          )}
-
-          {result.scores.length > 0 && (
-            <ul className="mt-3 space-y-1 text-sm">
-              {result.scores.map((score) => (
-                <li key={score.dimension}>
-                  <span className="font-medium capitalize">{score.dimension}</span>:{" "}
-                  {(score.score * 100).toFixed(0)}% — {score.feedback}
-                </li>
-              ))}
-            </ul>
           )}
 
           {result.test_results.length > 0 && (
@@ -167,6 +287,10 @@ export function CodeEditor({ challenge, sessionId, onSubmitted }: CodeEditorProp
           )}
         </div>
       )}
+
+      {llmRubric && <LlmRubricPanel rubric={llmRubric} />}
+
+      {contract && <ContractPanel contract={contract} />}
     </div>
   );
 }

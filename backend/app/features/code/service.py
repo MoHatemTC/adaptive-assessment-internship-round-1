@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.features.code import adaptation, analysis, evaluation_memory, grading, tool
+from app.features.code import adaptation, analysis, evaluation_memory, generation, grading, tool
 from app.features.code.models import (
     CodeChallenge,
     CodeSubmission,
@@ -23,12 +23,17 @@ from app.features.code.schemas import (
     ChallengeCreate,
     ChallengeListItem,
     ChallengeRead,
+    GenerateChallengeRequest,
+    GenerateChallengeResponse,
+    LlmRubricSummary,
     RubricScoreRead,
     SubmissionCreate,
     SubmissionRead,
+    TestCaseCreate,
     TestCaseDTO,
     TestCaseRead,
 )
+from app.shared.schemas.memory import DimensionScore, RubricScores
 
 
 def _test_case_to_dto(tc: TestCase) -> TestCaseDTO:
@@ -96,6 +101,51 @@ def _submission_to_read(
     )
 
 
+def _starter_contract(session_id: str) -> AdaptiveContract:
+    """Default contract for the first generated question in a session."""
+    return AdaptiveContract(
+        session_id=session_id,
+        question_index=0,
+        tool_type="coding",
+        difficulty="beginner",
+        focus_dimension=None,
+        stop=False,
+        memory_summary="Starting coding assessment at beginner difficulty.",
+        cumulative_scores=DimensionScore(),
+    )
+
+
+def _rubric_dimension(rubric: RubricScores, name: str) -> tuple[float, str]:
+    for dim in rubric.dimensions:
+        if dim.name == name:
+            return dim.score, dim.feedback
+    return 0.0, ""
+
+
+def _llm_rubric_summary(rubric: RubricScores) -> LlmRubricSummary:
+    approach_score, approach_feedback = _rubric_dimension(rubric, "approach")
+    efficiency_score, efficiency_feedback = _rubric_dimension(rubric, "efficiency")
+    return LlmRubricSummary(
+        approach_score=approach_score,
+        approach_feedback=approach_feedback,
+        efficiency_score=efficiency_score,
+        efficiency_feedback=efficiency_feedback,
+        overall=rubric.overall,
+    )
+
+
+async def _session_challenge_titles(db: AsyncSession, session_id: str) -> list[str]:
+    rows = (
+        await db.exec(
+            select(CodeChallenge.title)
+            .join(CodeSubmission, CodeSubmission.challenge_id == CodeChallenge.id)
+            .where(CodeSubmission.session_id == session_id)
+            .order_by(CodeSubmission.id)
+        )
+    ).all()
+    return list(rows)
+
+
 async def create_challenge(db: AsyncSession, payload: ChallengeCreate) -> ChallengeRead:
     challenge = CodeChallenge(
         title=payload.title,
@@ -126,6 +176,53 @@ async def create_challenge(db: AsyncSession, payload: ChallengeCreate) -> Challe
     )
     loaded = result.one()
     return _challenge_to_read(loaded)
+
+
+async def generate_challenge(
+    db: AsyncSession,
+    payload: GenerateChallengeRequest,
+) -> GenerateChallengeResponse:
+    """Author and persist the next challenge from an adaptive contract."""
+    contract = payload.contract or _starter_contract(payload.session_id)
+    if contract.stop:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Adaptive loop signalled stop; no further challenges.",
+        )
+
+    previous_titles = await _session_challenge_titles(db, payload.session_id)
+    try:
+        spec = await generation.generate_challenge_spec(
+            contract=contract,
+            assessment_id=payload.assessment_id,
+            previous_titles=previous_titles,
+        )
+    except grading.LLMGradingUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    challenge = await create_challenge(
+        db,
+        ChallengeCreate(
+            title=spec.title,
+            description=spec.description,
+            starter_code=spec.starter_code,
+            language="python",
+            time_limit_seconds=20,
+            test_cases=[
+                TestCaseCreate(
+                    input=tc.input,
+                    expected_output=tc.expected_output,
+                    is_hidden=tc.is_hidden,
+                    weight=1.0,
+                )
+                for tc in spec.test_cases
+            ],
+        ),
+    )
+    return GenerateChallengeResponse(challenge=challenge, contract=contract)
 
 
 async def list_challenges(db: AsyncSession) -> list[ChallengeListItem]:
@@ -254,7 +351,7 @@ async def run_adaptive_loop(
     assessment_id: str,
     question_index: int,
     difficulty: str,
-) -> AdaptiveContract:
+) -> tuple[AdaptiveContract, LlmRubricSummary]:
     """Run the four adaptive-loop layers sequentially for one submission.
 
     Grades the submission (Layer 1), extracts an evidence memory card
@@ -262,40 +359,26 @@ async def run_adaptive_loop(
     adaptive contract for the next question (Layer 4). Layers 1–3 persist rows;
     Layer 4 only reads. The caller is responsible for committing.
 
-    Args:
-        db: Active async database session.
-        submission_id: PK of the graded ``code_submissions`` row.
-        session_id: Platform assessment session UUID.
-        assessment_id: Parent assessment identifier.
-        question_index: Zero-based position in the assessment blueprint.
-        difficulty: Difficulty tier of the answered question.
-
     Returns:
-        The :class:`AdaptiveContract` for the next question.
+        The next :class:`AdaptiveContract` and learner-visible LLM rubric summary.
     """
     grade = await grading.grade_submission(db, submission_id, session_id, question_index)
+    rubric = RubricScores.model_validate_json(grade.rubric_scores)
     await evaluation_memory.extract_memory_card(
         db, session_id, question_index, grade.id, difficulty
     )
     await analysis.analyse_session(db, session_id, question_index)
-    return await adaptation.compute_adaptive_contract(db, session_id, assessment_id)
+    contract = await adaptation.compute_adaptive_contract(db, session_id, assessment_id)
+    return contract, _llm_rubric_summary(rubric)
 
 
 async def adaptive_submit(
     db: AsyncSession, payload: AdaptiveSubmitRequest
 ) -> AdaptiveSubmitResponse:
-    """Accept a submission, run the adaptive loop, and return the next contract.
+    """Accept a submission, run the adaptive loop, and return the contract.
 
-    Persists the submission (with sandbox grading), runs the four-layer loop,
-    commits, and returns only learner-safe data plus the adaptive contract.
-
-    Args:
-        db: Active async database session.
-        payload: The adaptive submit request.
-
-    Returns:
-        An :class:`AdaptiveSubmitResponse` with the submission outcome and the
-        adaptive contract for the next question.
+    Challenge generation is a separate ``POST /generate-challenge`` call so the
+    submit request stays within frontend proxy timeouts.
     """
     submission = await submit_code(
         db,
@@ -307,7 +390,7 @@ async def adaptive_submit(
     )
 
     try:
-        contract = await run_adaptive_loop(
+        contract, llm_rubric = await run_adaptive_loop(
             db,
             submission_id=submission.id,
             session_id=payload.session_id,
@@ -327,5 +410,7 @@ async def adaptive_submit(
         submission_id=submission.id,
         passed=submission.passed,
         score=submission.score,
+        llm_rubric=llm_rubric,
         contract=contract,
+        next_challenge=None,
     )

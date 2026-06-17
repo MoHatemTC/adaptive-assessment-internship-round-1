@@ -56,7 +56,7 @@ async def test_run_adaptive_loop_persists_all_layers(monkeypatch):
             db.add(submission)
             await db.flush()
 
-            contract = await service.run_adaptive_loop(
+            contract, llm_rubric = await service.run_adaptive_loop(
                 db,
                 submission_id=submission.id or 0,
                 session_id=session_id,
@@ -66,6 +66,7 @@ async def test_run_adaptive_loop_persists_all_layers(monkeypatch):
             )
 
             assert contract.session_id == session_id
+            assert llm_rubric.approach_score == 0.8
             assert contract.tool_type == "coding"
             assert contract.question_index == 1
             # 1 card, passed -> score 10 -> advanced next difficulty.

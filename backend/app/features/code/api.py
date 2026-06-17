@@ -11,6 +11,8 @@ from app.features.code.schemas import (
     ChallengeCreate,
     ChallengeListItem,
     ChallengeRead,
+    GenerateChallengeRequest,
+    GenerateChallengeResponse,
     SubmissionCreate,
     SubmissionRead,
 )
@@ -69,3 +71,12 @@ async def adaptive_submit(
     db: AsyncSession = Depends(get_db),
 ) -> AdaptiveSubmitResponse:
     return await service.adaptive_submit(db, payload)
+
+
+@router.post("/generate-challenge", response_model=GenerateChallengeResponse, status_code=201)
+async def generate_challenge(
+    request: Request,
+    payload: GenerateChallengeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> GenerateChallengeResponse:
+    return await service.generate_challenge(db, payload)
