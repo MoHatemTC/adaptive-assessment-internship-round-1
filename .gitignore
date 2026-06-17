@@ -29,6 +29,7 @@ node_modules/
 out/
 .turbo/
 next-env.d.ts
+*.tsbuildinfo
 
 # ── Env ──────────────────────────────────────────────────────
 # Actual env files (root and backend/) — never commit secrets.
@@ -63,3 +64,11 @@ prd.md
 # -- Cursor files --
 Cursor.md
 .cursor/
+
+# -- graphify files --
+graphify.md
+.graphify/
+graphify-out/
+
+# ── uv (for local tests) ──────────────────────────────────────────────
+uv.lock

@@ -9,9 +9,17 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.features.code import tool
-from app.features.code.models import CodeChallenge, CodeSubmission, SubmissionStatus, TestCase
+from app.features.code import adaptation, analysis, evaluation_memory, grading, tool
+from app.features.code.models import (
+    CodeChallenge,
+    CodeSubmission,
+    SubmissionStatus,
+    TestCase,
+)
 from app.features.code.schemas import (
+    AdaptiveContract,
+    AdaptiveSubmitRequest,
+    AdaptiveSubmitResponse,
     ChallengeCreate,
     ChallengeListItem,
     ChallengeRead,
@@ -236,4 +244,81 @@ async def submit_code(db: AsyncSession, payload: SubmissionCreate) -> Submission
         passed_tests=metadata["passed_tests"],
         hidden_tests_count=metadata["hidden_tests_count"],
         error=metadata.get("error"),
+    )
+
+
+async def run_adaptive_loop(
+    db: AsyncSession,
+    submission_id: int,
+    session_id: str,
+    assessment_id: str,
+    question_index: int,
+    difficulty: str,
+) -> AdaptiveContract:
+    """Run the four adaptive-loop layers sequentially for one submission.
+
+    Grades the submission (Layer 1), extracts an evidence memory card
+    (Layer 2), aggregates skill-dimension scores (Layer 3) and computes the
+    adaptive contract for the next question (Layer 4). Layers 1–3 persist rows;
+    Layer 4 only reads. The caller is responsible for committing.
+
+    Args:
+        db: Active async database session.
+        submission_id: PK of the graded ``code_submissions`` row.
+        session_id: Platform assessment session UUID.
+        assessment_id: Parent assessment identifier.
+        question_index: Zero-based position in the assessment blueprint.
+        difficulty: Difficulty tier of the answered question.
+
+    Returns:
+        The :class:`AdaptiveContract` for the next question.
+    """
+    grade = await grading.grade_submission(db, submission_id, session_id, question_index)
+    await evaluation_memory.extract_memory_card(
+        db, session_id, question_index, grade.id, difficulty
+    )
+    await analysis.analyse_session(db, session_id, question_index)
+    return await adaptation.compute_adaptive_contract(db, session_id, assessment_id)
+
+
+async def adaptive_submit(
+    db: AsyncSession, payload: AdaptiveSubmitRequest
+) -> AdaptiveSubmitResponse:
+    """Accept a submission, run the adaptive loop, and return the next contract.
+
+    Persists the submission (with sandbox grading), runs the four-layer loop,
+    commits, and returns only learner-safe data plus the adaptive contract.
+
+    Args:
+        db: Active async database session.
+        payload: The adaptive submit request.
+
+    Returns:
+        An :class:`AdaptiveSubmitResponse` with the submission outcome and the
+        adaptive contract for the next question.
+    """
+    submission = await submit_code(
+        db,
+        SubmissionCreate(
+            challenge_id=payload.challenge_id,
+            session_id=payload.session_id,
+            submitted_code=payload.submitted_code,
+        ),
+    )
+
+    contract = await run_adaptive_loop(
+        db,
+        submission_id=submission.id,
+        session_id=payload.session_id,
+        assessment_id=payload.assessment_id,
+        question_index=payload.question_index,
+        difficulty=payload.difficulty,
+    )
+    await db.commit()
+
+    return AdaptiveSubmitResponse(
+        submission_id=submission.id,
+        passed=submission.passed,
+        score=submission.score,
+        contract=contract,
     )
