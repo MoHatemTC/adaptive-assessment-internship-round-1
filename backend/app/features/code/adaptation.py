@@ -34,11 +34,11 @@ _ENGAGED_DIMENSIONS: tuple[DimensionName, ...] = ("thinking", "work", "digital_a
 
 @dataclass(frozen=True)
 class AdaptivePolicy:
-    """Admin-configured coding adaptation policy with conservative defaults."""
+    """Learner/profile and admin-configured coding adaptation policy."""
 
-    max_questions: int = 5
-    intermediate_at: int = 5
-    advanced_at: int = 8
+    max_questions: int | None
+    intermediate_at: int | None
+    advanced_at: int | None
     initial_difficulty: DifficultyLevel = "beginner"
 
 
@@ -60,13 +60,13 @@ def _section(data: dict[str, Any], *names: str) -> dict[str, Any]:
     return {}
 
 
-def _int_setting(data: dict[str, Any], key: str, default: int) -> int:
+def _optional_int_setting(data: dict[str, Any], key: str) -> int | None:
     value = data.get(key)
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.isdigit():
         return int(value)
-    return default
+    return None
 
 
 def _difficulty_setting(value: object, default: DifficultyLevel) -> DifficultyLevel:
@@ -116,22 +116,22 @@ def _policy_from_config(
         or coding_tool_config.get("initial_difficulty")
     )
 
-    max_questions = _int_setting(
-        coding_blueprint,
-        "max_questions",
-        _int_setting(
-            adaptive_blueprint,
-            "max_questions",
-            _int_setting(coding_tool_config, "max_questions", 5),
-        ),
+    max_questions = (
+        _optional_int_setting(coding_blueprint, "max_questions")
+        or _optional_int_setting(adaptive_blueprint, "max_questions")
+        or _optional_int_setting(coding_tool_config, "max_questions")
     )
-    intermediate_at = _int_setting(thresholds, "intermediate", 5)
-    advanced_at = _int_setting(thresholds, "advanced", 8)
-    intermediate_at = max(1, min(10, intermediate_at))
-    advanced_at = max(intermediate_at, min(10, advanced_at))
+    intermediate_at = _optional_int_setting(thresholds, "intermediate")
+    advanced_at = _optional_int_setting(thresholds, "advanced")
+    if intermediate_at is not None:
+        intermediate_at = max(1, min(10, intermediate_at))
+    if advanced_at is not None:
+        advanced_at = max(1, min(10, advanced_at))
+    if intermediate_at is not None and advanced_at is not None:
+        advanced_at = max(intermediate_at, advanced_at)
 
     return AdaptivePolicy(
-        max_questions=max(1, max_questions),
+        max_questions=max(1, max_questions) if max_questions is not None else None,
         intermediate_at=intermediate_at,
         advanced_at=advanced_at,
         initial_difficulty=_difficulty_setting(initial, default_initial),
@@ -149,11 +149,11 @@ def _difficulty_for(avg: int | None, policy: AdaptivePolicy) -> DifficultyLevel:
     """Map an average engaged score to the next question's configured tier."""
     if avg is None:
         return policy.initial_difficulty
-    if avg >= policy.advanced_at:
+    if policy.advanced_at is not None and avg >= policy.advanced_at:
         return "advanced"
-    if avg >= policy.intermediate_at:
+    if policy.intermediate_at is not None and avg >= policy.intermediate_at:
         return "intermediate"
-    return "beginner"
+    return policy.initial_difficulty
 
 
 async def compute_adaptive_contract(
@@ -220,7 +220,9 @@ async def compute_adaptive_contract(
 
     answered = len({row.question_index for row in rows})
     next_index = (max((row.question_index for row in rows), default=-1)) + 1
-    stop = session_completed or answered >= policy.max_questions
+    stop = session_completed or (
+        policy.max_questions is not None and answered >= policy.max_questions
+    )
 
     if stop:
         memory_summary = (

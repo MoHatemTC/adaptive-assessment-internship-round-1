@@ -88,6 +88,10 @@ class CodeMemoryCard(Base):
         submission_id: PK of the originating ``code_submissions`` row.
         memory_card_id: PK of the linked platform ``memory_cards`` row.
         sandbox_score: Weighted E2B test-pass score in ``[0, 1]``.
+        overall_rubric_score: Blended correctness/LLM score persisted on the
+            platform grade result.
+        test_results: JSON array of structured sandbox test results used as
+            private examiner evidence.
         approach_feedback: LLM rubric feedback on solution approach.
         efficiency_feedback: LLM rubric feedback on solution efficiency.
         created_at: Server-set timestamp of row insertion.
@@ -104,6 +108,9 @@ class CodeMemoryCard(Base):
     memory_card_id: Mapped[int] = mapped_column(nullable=False)
     # FK to platform memory_cards.id (deferred, cross-metadata)
     sandbox_score: Mapped[float] = mapped_column(Float, nullable=False)
+    overall_rubric_score: Mapped[float] = mapped_column(Float, nullable=False)
+    test_results: Mapped[str] = mapped_column(Text, nullable=False)
+    # JSON: list[TestCaseResult] from full sandbox execution, including hidden tests
     approach_feedback: Mapped[str] = mapped_column(Text, nullable=False)
     efficiency_feedback: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

@@ -64,6 +64,35 @@ to continue the flow. Challenge generation recomputes the rich contract
 server-side from the database, so private memory summaries never need to round
 trip through the browser.
 
+## Memory Card Schema
+
+The platform row in `memory_cards` stores the cross-tool evidence card:
+
+| Column | Contents |
+|--------|----------|
+| `session_id` | Platform assessment session UUID |
+| `tool_type` | Always `coding` |
+| `question_index` | Zero-based question position |
+| `difficulty` | Difficulty of the answered question |
+| `evidence_summary` | Private examiner summary derived from sandbox + rubric |
+| `dimension_signals` | JSON flags for `thinking`, `work`, and `digital_ai` |
+| `passed` | Official sandbox pass/fail |
+
+The coding detail row in `code_memory_cards` stores code-specific private
+evidence linked by `memory_card_id`:
+
+| Column | Contents |
+|--------|----------|
+| `submission_id` | Source `code_submissions.id` |
+| `sandbox_score` | Weighted E2B correctness score |
+| `overall_rubric_score` | Blended overall score from `grade_results.rubric_scores` |
+| `test_results` | JSON array of structured sandbox results, including hidden tests |
+| `approach_feedback` | LLM approach feedback |
+| `efficiency_feedback` | LLM efficiency feedback |
+
+These rows are used by adaptation/reporting only. They are not returned from
+`/adaptive-submit` and are not rendered during the active learner session.
+
 ## Adaptation Policy
 
 `adaptation.py` reads both platform tables when available:
@@ -71,7 +100,7 @@ trip through the browser.
 - `assessment_sessions.learner_profile_json` chooses the first difficulty from
   learner level (`junior`/`beginner`, `mid`/`intermediate`,
   `senior`/`advanced`).
-- `assessments.blueprint_json` or `assessments.tool_config` can configure:
+- `assessments.blueprint_json` or `assessments.tool_config` configures:
   - `coding.max_questions`
   - `coding.initial_difficulty`
   - `coding.difficulty_thresholds.intermediate`
@@ -92,7 +121,9 @@ Example:
 }
 ```
 
-When no admin config exists, conservative defaults keep the demo runnable.
+If no thresholds are configured, score-based difficulty escalation is not
+inferred. If no max-question value is configured, the loop stops only when the
+platform session is completed or expired.
 
 ## APIs
 
@@ -145,7 +176,8 @@ docker compose exec backend pytest tests/features/test_code_generation.py tests/
 ```
 
 Unit tests mock E2B and cover sandbox timeouts, cold-start timeouts, BaseTool
-silent output, generation, language runners, and adaptation boundaries.
+silent output, duplicate-submit idempotency, memory-card evidence persistence,
+generation, language runners, and config-bound adaptation boundaries.
 
 Live E2B smoke tests are opt-in:
 
