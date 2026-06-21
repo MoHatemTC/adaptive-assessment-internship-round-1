@@ -41,6 +41,7 @@ from app.features.code.schemas import (
     TestCaseDTO,
     TestCaseRead,
 )
+from app.sessions.models import GradeResult
 from app.shared.schemas.memory import DimensionScore, RubricScores
 
 
@@ -376,6 +377,7 @@ async def submit_code(db: AsyncSession, payload: SubmissionCreate) -> Submission
     metadata = {
         "scores": scores,
         "test_results": [r.model_dump() for r in visible_results],
+        "all_test_results": [r.model_dump() for r in results],
         "total_tests": len(test_case_dtos),
         "passed_tests": sum(1 for r in results if r.passed),
         "hidden_tests_count": sum(1 for tc in test_case_dtos if tc.is_hidden),
@@ -435,6 +437,27 @@ async def run_adaptive_loop(
     return contract, _llm_rubric_summary(rubric)
 
 
+async def _find_idempotent_adaptive_submission(
+    db: AsyncSession,
+    payload: AdaptiveSubmitRequest,
+) -> CodeSubmission | None:
+    """Return an already graded identical official answer, if one exists."""
+    result = await db.exec(
+        select(CodeSubmission)
+        .join(GradeResult, GradeResult.tool_session_id == CodeSubmission.id)
+        .where(
+            GradeResult.session_id == payload.session_id,
+            GradeResult.tool_type == "coding",
+            GradeResult.question_index == payload.question_index,
+            CodeSubmission.challenge_id == payload.challenge_id,
+            CodeSubmission.session_id == payload.session_id,
+            CodeSubmission.submitted_code == payload.submitted_code,
+        )
+        .order_by(CodeSubmission.id)
+    )
+    return result.first()
+
+
 async def adaptive_submit(
     db: AsyncSession, payload: AdaptiveSubmitRequest
 ) -> AdaptiveSubmitResponse:
@@ -443,6 +466,22 @@ async def adaptive_submit(
     Challenge generation is a separate ``POST /generate-challenge`` call so the
     submit request stays within frontend proxy timeouts.
     """
+    existing_submission = await _find_idempotent_adaptive_submission(db, payload)
+    if existing_submission is not None:
+        contract = await adaptation.compute_adaptive_contract(
+            db,
+            payload.session_id,
+            payload.assessment_id,
+        )
+        return AdaptiveSubmitResponse(
+            submission_id=existing_submission.id or 0,
+            passed=None,
+            score=None,
+            llm_rubric=None,
+            contract=_learner_safe_contract(contract),
+            next_challenge=None,
+        )
+
     submission = await submit_code(
         db,
         SubmissionCreate(

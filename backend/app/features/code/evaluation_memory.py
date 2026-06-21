@@ -10,6 +10,8 @@ dimensions; ``soft`` and ``growth`` are not exercised by a code submission.
 
 from __future__ import annotations
 
+import json
+
 from fastapi import HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -83,7 +85,7 @@ async def extract_memory_card(
         session_id: Platform assessment session UUID.
         question_index: Zero-based position in the assessment blueprint.
         grade_result_id: PK of the ``grade_results`` row produced by Layer 1.
-        difficulty: Question difficulty — ``"beginner"``/``"intermediate"``/``"advanced"``.
+    difficulty: Question difficulty.
 
     Returns:
         A :class:`MemoryCardRead` view of the persisted platform card.
@@ -112,8 +114,20 @@ async def extract_memory_card(
     approach_feedback = _dimension_feedback(rubric, "approach")
     efficiency_feedback = _dimension_feedback(rubric, "efficiency")
     passed = bool(submission.passed)
+    metadata = (
+        json.loads(submission.grading_metadata) if submission.grading_metadata else {}
+    )
+    structured_test_results = metadata.get("all_test_results") or metadata.get(
+        "test_results", []
+    )
 
-    signals = DimensionSignals(thinking=True, soft=False, work=True, digital_ai=True, growth=False)
+    signals = DimensionSignals(
+        thinking=True,
+        soft=False,
+        work=True,
+        digital_ai=True,
+        growth=False,
+    )
     evidence_summary = _build_evidence_summary(
         passed=passed,
         sandbox_score=sandbox_score,
@@ -150,6 +164,8 @@ async def extract_memory_card(
         submission_id=submission.id or 0,
         memory_card_id=memory_card.id,
         sandbox_score=sandbox_score,
+        overall_rubric_score=rubric.overall,
+        test_results=json.dumps(structured_test_results),
         approach_feedback=approach_feedback,
         efficiency_feedback=efficiency_feedback,
     )
