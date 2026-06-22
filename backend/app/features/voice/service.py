@@ -94,7 +94,7 @@ async def _transcribe_chunk(
 
     try:
         response = await litellm.atranscription(
-            model=settings.STT_MODEL,
+            model=settings.TRANSCRIPTION_MODEL,
             file=audio_file,
             api_base=settings.LITELLM_BASE_URL,
             api_key=settings.LITELLM_API_KEY.get_secret_value(),

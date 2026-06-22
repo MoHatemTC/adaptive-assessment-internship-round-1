@@ -101,7 +101,7 @@ Transcript text, average confidence, rubric scores, `grade_result_id`,
   auth flow, and connection management. LiteLLM's atranscription()
   provides a uniform interface.
 - **Vendor flexibility:** Swapping the STT model requires one
-  .env change (STT_MODEL=...) with no code changes.
+  .env change (TRANSCRIPTION_MODEL=...) with no code changes.
 
 ### Accuracy comparison
 
