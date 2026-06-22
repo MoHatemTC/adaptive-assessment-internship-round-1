@@ -145,3 +145,16 @@ docker compose exec backend pytest backend/tests/features/test_diagram_analysis.
 # test diagram adaptation layer
 docker compose exec backend pytest backend/tests/features/test_diagram_adaptation.py -v
 ```
+
+`test_diagram.py` covers:
+
+| Test                                          | Covers                                      |
+| --------------------------------------------- | ------------------------------------------- |
+| `test_rejects_bad_mime`                       | Rejects non-image MIME types                |
+| `test_rejects_oversized`                      | Rejects images over 5 MB                    |
+| `test_accepts_valid_jpeg`                     | Accepts valid JPEG, returns base64          |
+| `test_get_question_shape`                     | GET returns correct fields, rubric excluded |
+| `test_get_question_404`                       | GET returns 404 for missing question        |
+| `test_submit_answer_returns_grading`          | POST persists answer, returns score         |
+| `test_vision_message_has_image_content_block` | Image sent as vision block, not text        |
+| `test_vision_image_is_data_uri`               | Vision block uses `data:` URI format        |
