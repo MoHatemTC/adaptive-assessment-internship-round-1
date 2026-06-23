@@ -143,10 +143,10 @@ async def test_transcript_stored_per_chunk(db_session, monkeypatch):
     )
     await db_session.commit()
 
-    async def fake_transcribe(audio_bytes: bytes) -> tuple[str, float | None]:
+    async def fake_transcribe(audio_chunk: bytes, settings, logger) -> tuple[str, float]:
         return "hello world", 0.95
 
-    # Isolate the Deepgram call — no network during tests.
+    # Isolate the LiteLLM transcription call — no network during tests.
     monkeypatch.setattr(voice_service, "_transcribe_chunk", fake_transcribe)
 
     chunk = await stream_audio_chunk(voice_session.id, b"fake-audio-bytes")

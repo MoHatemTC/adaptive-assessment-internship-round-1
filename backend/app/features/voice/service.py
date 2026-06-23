@@ -1,26 +1,24 @@
-"""Voice interview persistence and Deepgram speech-to-text integration.
+"""Voice interview persistence and LiteLLM speech-to-text integration.
 
 This layer owns the voice session lifecycle (create -> start -> end), per-chunk
-transcript persistence, and the real-time transcription call into Deepgram. It
+transcript persistence, and the real-time transcription call via LiteLLM. It
 mirrors the MCQ feature's service conventions: SQLModel ``select`` queries via
 ``db.exec``, ``db.flush`` (commit is owned by the caller / ``get_db``), a 404
 helper for missing sessions, and structured ``structlog`` events.
 
-Transcription is performed with the Deepgram SDK v7 ``DeepgramClient`` (never
-the legacy ``Deepgram`` class). The raw transcript is persisted in full so the
-silent LLM judge can score it later; scores are never surfaced to the learner.
+The raw transcript is persisted in full so the silent LLM judge can score it
+later; scores are never surfaced to the learner.
 """
 
 from datetime import datetime, timezone
-from functools import lru_cache
+from typing import Any
 
-from deepgram import AsyncDeepgramClient
 from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.features.voice.models import VoiceSession, VoiceTranscript
@@ -28,26 +26,10 @@ from app.features.voice.schemas import VoiceTranscriptChunk
 
 _logger = get_logger(__name__)
 
-#: Minimum Deepgram confidence for a chunk to count toward the final transcript.
-#: Chunks below this are still stored (for audit/debugging) but marked
-#: ``is_final=False`` so :func:`end_voice_session` excludes them.
+#: Minimum transcription confidence for a chunk to count toward the final
+#: transcript. Chunks below this are still stored (for audit/debugging) but
+#: marked ``is_final=False`` so :func:`end_voice_session` excludes them.
 CONFIDENCE_THRESHOLD: float = 0.6
-
-
-@lru_cache
-def _get_deepgram_client() -> AsyncDeepgramClient:
-    """Return a process-wide async Deepgram SDK v7 client.
-
-    The client is cached so the API key is read and the client constructed
-    exactly once per process. Uses :class:`AsyncDeepgramClient` (SDK v7), not the
-    legacy ``Deepgram`` class.
-
-    Returns:
-        A configured :class:`deepgram.AsyncDeepgramClient`.
-    """
-    return AsyncDeepgramClient(
-        api_key=get_settings().DEEPGRAM_API_KEY.get_secret_value()
-    )
 
 
 async def _get_voice_session_or_404(
@@ -83,43 +65,59 @@ async def _get_voice_session_or_404(
     return voice_session
 
 
-async def _transcribe_chunk(audio_bytes: bytes) -> tuple[str, float | None]:
-    """Transcribe a single audio chunk via Deepgram and return text + confidence.
+async def _transcribe_chunk(
+    audio_chunk: bytes,
+    settings: Settings,
+    logger: Any,
+) -> tuple[str, float]:
+    """Transcribe a single audio chunk via LiteLLM and return text + confidence.
 
-    Isolates the Deepgram SDK call so callers (and tests) can treat
-    transcription as a single seam. The raw bytes are sent to Deepgram's
-    pre-recorded transcription endpoint and the top alternative is returned.
+    Isolates the LiteLLM transcription call so callers (and tests) can treat
+    transcription as a single seam.
 
     Args:
-        audio_bytes: Raw audio payload for one streamed chunk.
+        audio_chunk: Raw audio payload for one streamed chunk.
+        settings: Application settings, used to resolve the STT model and the
+            LiteLLM proxy base URL.
+        logger: Structured logger used to record the outcome.
 
     Returns:
-        A ``(transcript_text, speaker_confidence)`` tuple. ``transcript_text``
-        is an empty string when Deepgram returns no alternative, and
-        ``speaker_confidence`` is ``None`` when no score is reported.
+        A ``(transcript_text, confidence)`` tuple. ``transcript_text`` is an
+        empty string and ``confidence`` is ``0.0`` if transcription fails.
     """
-    client = _get_deepgram_client()
+    import io
 
-    # Verified against deepgram-sdk==7.2.0: async pre-recorded transcription is
-    # exposed at ``listen.v1.media.transcribe_file``, taking the raw audio as the
-    # ``request`` keyword and options as keyword args. Response parsing below is
-    # defensive so a shape change degrades to empty text rather than raising
-    # mid-stream.
-    response = await client.listen.v1.media.transcribe_file(
-        request=audio_bytes,
-        model="nova-2",
-        smart_format=True,
-    )
+    import litellm
+
+    audio_file = io.BytesIO(audio_chunk)
+    audio_file.name = "audio.webm"
 
     try:
-        alternative = response.results.channels[0].alternatives[0]
-        transcript_text = getattr(alternative, "transcript", "") or ""
-        confidence = getattr(alternative, "confidence", None)
-    except (AttributeError, IndexError, KeyError, TypeError):
-        _logger.warning("deepgram_response_unparseable")
-        return "", None
+        response = await litellm.atranscription(
+            model=settings.TRANSCRIPTION_MODEL,
+            file=audio_file,
+            api_base=settings.LITELLM_BASE_URL,
+            api_key=settings.LITELLM_API_KEY.get_secret_value(),
+        )
+        transcript_text = response.text or ""
 
-    return transcript_text, confidence
+        confidence = 1.0
+        if hasattr(response, "segments") and response.segments:
+            avg_no_speech = sum(
+                s.get("no_speech_prob", 0.0) for s in response.segments
+            ) / len(response.segments)
+            confidence = 1.0 - avg_no_speech
+
+        logger.info(
+            "whisper_transcription_ok",
+            chars=len(transcript_text),
+            confidence=confidence,
+        )
+        return transcript_text, confidence
+
+    except Exception as e:
+        logger.error("whisper_transcription_failed", error=str(e))
+        return "", 0.0
 
 
 async def create_voice_session(
@@ -208,7 +206,9 @@ async def stream_audio_chunk(
         A :class:`~app.features.voice.schemas.VoiceTranscriptChunk` describing
         the persisted transcript delta.
     """
-    transcript_text, confidence = await _transcribe_chunk(audio_bytes)
+    transcript_text, confidence = await _transcribe_chunk(
+        audio_bytes, get_settings(), _logger
+    )
 
     async with async_session() as db:
         count_result = await db.exec(

@@ -49,6 +49,8 @@ class Settings(BaseSettings):
         LITELLM_VISION_MODEL: Optional vision/VLM model for diagram grading.
             When empty, ``LITELLM_MODEL`` is used (e.g. Kimi K2.6 multimodal).
         DEEPGRAM_API_KEY: API key for the Deepgram speech-to-text service.
+        TRANSCRIPTION_MODEL: LiteLLM model identifier used for speech-to-text
+            transcription (e.g. ``"azure/whisper"``).
         QDRANT_URL: Base URL of the Qdrant vector database.
         QDRANT_API_KEY: API key for Qdrant (may be empty for local instances).
         LANGFUSE_PUBLIC_KEY: Langfuse public key for observability tracing.
@@ -76,7 +78,8 @@ class Settings(BaseSettings):
     LITELLM_VISION_MODEL: str = ""
 
     # ── Speech-to-text ────────────────────────────────────────────────────────
-    DEEPGRAM_API_KEY: SecretStr
+    # The correct env var name confirmed by the infrastructure team
+    TRANSCRIPTION_MODEL: str = "azure/whisper"
 
     # ── Vector database ───────────────────────────────────────────────────────
     QDRANT_URL: str

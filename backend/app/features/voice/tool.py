@@ -71,6 +71,28 @@ class VoiceTool(BaseTool):
         """
         return "Conducts a time-boxed voice interview with real-time transcription"
 
+    @property
+    def input_schema(self) -> type:
+        """Pydantic model that defines the adaptive evaluation input contract.
+
+        Returns:
+            The :class:`~app.features.voice.schemas.VoiceAdaptiveInput` class.
+        """
+        from app.features.voice.schemas import VoiceAdaptiveInput
+
+        return VoiceAdaptiveInput
+
+    @property
+    def output_schema(self) -> type:
+        """Pydantic model that defines the adaptive evaluation output contract.
+
+        Returns:
+            The :class:`~app.features.voice.schemas.VoiceAdaptiveOutput` class.
+        """
+        from app.features.voice.schemas import VoiceAdaptiveOutput
+
+        return VoiceAdaptiveOutput
+
     def build_graph(self) -> CompiledStateGraph:
         """Build and compile the voice interview subgraph.
 

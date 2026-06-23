@@ -10,6 +10,7 @@ and never trimmed for the learner's benefit.
 """
 
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
 
@@ -31,6 +32,10 @@ class VoiceSession(Base):
         status: Lifecycle state, one of ``"pending"``, ``"active"``, or
             ``"completed"``. Defaults to ``"pending"`` server-side.
         time_limit_seconds: Maximum interview duration in seconds.
+        question_text: The interview question posed for this session, or ``None``
+            for legacy rows created before adaptive columns existed.
+        question_index: Zero-based position of the question in the assessment
+            blueprint, or ``None`` for legacy rows.
         started_at: Timestamp the interview became active, or ``None`` if it has
             not started yet.
         ended_at: Timestamp the interview finished, or ``None`` while running.
@@ -46,6 +51,9 @@ class VoiceSession(Base):
         String(20), nullable=False, server_default="pending"
     )
     time_limit_seconds: Mapped[int] = mapped_column(nullable=False)
+    # Adaptive loop context — nullable so pre-existing rows are preserved.
+    question_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    question_index: Mapped[int | None] = mapped_column(nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -60,18 +68,19 @@ class VoiceSession(Base):
 class VoiceTranscript(Base):
     """A single real-time transcript chunk belonging to a :class:`VoiceSession`.
 
-    Chunks arrive in order as Deepgram streams interim and final results.
-    ``chunk_index`` preserves ordering, ``is_final`` distinguishes settled text
-    from interim hypotheses, and ``speaker_confidence`` carries Deepgram's
-    confidence score when available.
+    Chunks arrive in order as Azure Whisper (via the LiteLLM proxy) streams
+    interim and final results. ``chunk_index`` preserves ordering, ``is_final``
+    distinguishes settled text from interim hypotheses, and
+    ``speaker_confidence`` carries the transcription confidence score when
+    available.
 
     Attributes:
         id: Surrogate primary key.
         voice_session_id: Foreign key to the owning :class:`VoiceSession`.
         chunk_index: Zero-based ordering index of the chunk within the session.
         transcript_text: The recognized text for this chunk.
-        speaker_confidence: Deepgram confidence score in ``[0.0, 1.0]``, or
-            ``None`` when not reported.
+        speaker_confidence: Transcription confidence score in ``[0.0, 1.0]``,
+            or ``None`` when not reported.
         is_final: Whether this chunk is a finalized transcript (``True``) or an
             interim hypothesis (``False``). Defaults to ``False`` server-side.
         created_at: Server-set timestamp of row insertion.
@@ -89,4 +98,41 @@ class VoiceTranscript(Base):
     is_final: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class VoiceMemoryCard(Base):
+    """Voice-specific memory card detail.
+
+    Stores the voice-slice fields that extend the platform
+    MemoryCard. Written by the evaluation layer after each
+    clean (non-flagged) voice response. References the base
+    memory_cards row via memory_card_id once that FK is active.
+    """
+
+    __tablename__ = "voice_memory_cards"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    voice_session_id: Mapped[int] = mapped_column(
+        nullable=False, index=True
+    )
+    # FK → voice_sessions.id — deferred until sessions feature merges
+    memory_card_id: Mapped[Optional[int]] = mapped_column(
+        nullable=True
+    )
+    # FK → memory_cards.id — set after run_memory_agent persists base card
+    competency: Mapped[str] = mapped_column(Text, nullable=False)
+    # First 5–7 words of the question, used as skill label
+    rubric_scores_json: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="{}"
+    )
+    # Serialized RubricScores from the LLM grader
+    communication_signals_json: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="{}"
+    )
+    # Serialized CommunicationSignals (clarity, fluency, confidence, structure)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
     )
