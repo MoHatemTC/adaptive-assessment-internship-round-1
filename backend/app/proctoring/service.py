@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
 from fastapi import HTTPException, status
@@ -11,16 +12,33 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.admin.models import Assessment
 from app.core.logging import get_logger
+from app.proctoring.audio_monitor import analyze_audio_signal
+from app.proctoring.events_catalog import (
+    EVENT_DEFAULT_SEVERITIES,
+    default_severity,
+    is_known_event_type,
+    normalize_enabled_checks,
+)
 from app.proctoring.identity import FaceMatchProvider, IdentityUnavailableError
 from app.proctoring.models import ProctoringEvent
 from app.proctoring.settings import get_proctoring_settings
+from app.proctoring.vlm_face import analyze_camera_frame
 from app.sessions.models import AssessmentSession
 from app.shared.schemas.proctoring import (
+    AudioAnalyzeRequest,
+    AudioAnalyzeResponse,
+    AudioViolationRead,
+    CameraAnalyzeRequest,
+    CameraAnalyzeResponse,
+    CameraViolationRead,
     IdentityVerifyRequest,
     IdentityVerifyResponse,
+    ProctoringEventBatchCreate,
+    ProctoringEventBatchResponse,
     ProctoringEventCreate,
     ProctoringEventRead,
     ProctoringPolicy,
+    ProctoringPolicyResponse,
     ProctoringSeverity,
     SessionIntegritySummary,
     VerificationStatus,
@@ -108,27 +126,150 @@ async def resolve_policy(db: AsyncSession, session: AssessmentSession) -> Procto
     """Resolve proctoring policy from assessment admin configuration."""
     assessment = await db.get(Assessment, session.assessment_id)
     threshold: int | None = None
+    enabled_checks: list[str] | None = None
+    camera_poll_interval_seconds = 20
+    event_cooldown_seconds = 30
+    require_camera = True
+    require_microphone = False
+
+    def _apply_cfg(cfg: dict[str, Any]) -> None:
+        nonlocal threshold, enabled_checks, camera_poll_interval_seconds
+        nonlocal event_cooldown_seconds, require_camera, require_microphone
+
+        raw_threshold = cfg.get("high_severity_threshold")
+        if isinstance(raw_threshold, int) and raw_threshold >= 1:
+            threshold = raw_threshold
+
+        raw_checks = cfg.get("enabled_checks")
+        if isinstance(raw_checks, list):
+            enabled_checks = [str(item) for item in raw_checks]
+
+        raw_poll = cfg.get("camera_poll_interval_seconds")
+        if isinstance(raw_poll, int) and 5 <= raw_poll <= 120:
+            camera_poll_interval_seconds = raw_poll
+
+        raw_cooldown = cfg.get("event_cooldown_seconds")
+        if isinstance(raw_cooldown, int) and 0 <= raw_cooldown <= 300:
+            event_cooldown_seconds = raw_cooldown
+
+        if "require_camera" in cfg:
+            require_camera = bool(cfg["require_camera"])
+        if "require_microphone" in cfg:
+            require_microphone = bool(cfg["require_microphone"])
 
     if assessment is not None:
         tool_config = _parse_json_dict(assessment.tool_config)
         proctoring_cfg = tool_config.get("proctoring")
         if isinstance(proctoring_cfg, dict):
-            raw = proctoring_cfg.get("high_severity_threshold")
-            if isinstance(raw, int) and raw >= 1:
-                threshold = raw
+            _apply_cfg(proctoring_cfg)
 
         if threshold is None:
             blueprint = _parse_json_dict(assessment.blueprint_json)
             proctoring_blueprint = blueprint.get("proctoring")
             if isinstance(proctoring_blueprint, dict):
-                raw = proctoring_blueprint.get("high_severity_threshold")
-                if isinstance(raw, int) and raw >= 1:
-                    threshold = raw
+                _apply_cfg(proctoring_blueprint)
 
     if threshold is None:
         threshold = get_proctoring_settings().PROCTORING_HIGH_SEVERITY_THRESHOLD
 
-    return ProctoringPolicy(high_severity_threshold=threshold)
+    return ProctoringPolicy(
+        high_severity_threshold=threshold,
+        enabled_checks=normalize_enabled_checks(enabled_checks),
+        camera_poll_interval_seconds=camera_poll_interval_seconds,
+        event_cooldown_seconds=event_cooldown_seconds,
+        require_camera=require_camera,
+        require_microphone=require_microphone,
+    )
+
+
+async def get_session_policy(
+    db: AsyncSession,
+    session_id: str,
+) -> ProctoringPolicyResponse:
+    """Return the resolved policy and severity defaults for a session."""
+    session = await _get_session_or_404(db, session_id)
+    policy = await resolve_policy(db, session)
+    return ProctoringPolicyResponse(
+        session_id=session_id,
+        default_severities=dict(EVENT_DEFAULT_SEVERITIES),
+        **policy.model_dump(),
+    )
+
+
+async def _recent_duplicate_event(
+    db: AsyncSession,
+    session_id: str,
+    event_type: str,
+    cooldown_seconds: int,
+) -> ProctoringEvent | None:
+    if cooldown_seconds <= 0:
+        return None
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=cooldown_seconds)
+    result = await db.exec(
+        select(ProctoringEvent)
+        .where(ProctoringEvent.session_id == session_id)
+        .where(ProctoringEvent.event_type == event_type)
+        .where(ProctoringEvent.created_at >= cutoff)
+        .order_by(ProctoringEvent.created_at.desc())
+        .limit(1)
+    )
+    return result.first()
+
+
+async def _persist_proctoring_event(
+    db: AsyncSession,
+    *,
+    session: AssessmentSession,
+    policy: ProctoringPolicy,
+    event_type: str,
+    severity: ProctoringSeverity,
+    metadata: dict[str, Any] | None = None,
+    client_timestamp: datetime | None = None,
+    enforce_cooldown: bool = True,
+) -> ProctoringEventRead | None:
+    """Insert an event when enabled and outside the cooldown window."""
+    if event_type not in policy.enabled_checks:
+        return None
+
+    if enforce_cooldown:
+        duplicate = await _recent_duplicate_event(
+            db,
+            session.id,
+            event_type,
+            policy.event_cooldown_seconds,
+        )
+        if duplicate is not None:
+            return None
+
+    event = ProctoringEvent(
+        session_id=session.id,
+        event_type=event_type,
+        severity=severity,
+        metadata_json=_serialize_metadata(metadata),
+        client_timestamp=client_timestamp,
+    )
+    db.add(event)
+    await db.flush()
+    await db.refresh(event)
+    return _event_to_read(event)
+
+
+async def _prepare_client_event(
+    payload: ProctoringEventCreate,
+    policy: ProctoringPolicy,
+) -> tuple[ProctoringSeverity, dict[str, Any] | None] | None:
+    """Validate a client event and return authoritative severity, or None to skip."""
+    if not is_known_event_type(payload.event_type):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unknown proctoring event type: {payload.event_type}",
+        )
+    if payload.event_type not in policy.enabled_checks:
+        return None
+
+    severity = default_severity(payload.event_type)
+    return severity, payload.metadata
 
 
 async def _load_session_events(
@@ -170,22 +311,120 @@ async def record_event(
 ) -> ProctoringEventRead:
     """Persist an integrity event and apply threshold flagging when needed."""
     session = await _get_session_or_404(db, payload.session_id)
-    policy = await resolve_policy(db, session)
+    if session.status in _TERMINAL_SESSION_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="session is no longer active",
+        )
 
-    event = ProctoringEvent(
-        session_id=payload.session_id,
-        event_type=payload.event_type,
-        severity=payload.severity,
-        metadata_json=_serialize_metadata(payload.metadata),
-        client_timestamp=payload.client_timestamp,
+    policy = await resolve_policy(db, session)
+    prepared = await _prepare_client_event(payload, policy)
+    if prepared is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"event type {payload.event_type!r} is disabled for this session",
+        )
+
+    severity, metadata = prepared
+    duplicate = await _recent_duplicate_event(
+        db,
+        session.id,
+        payload.event_type,
+        policy.event_cooldown_seconds,
     )
-    db.add(event)
-    await db.flush()
-    await db.refresh(event)
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"event {payload.event_type!r} is within cooldown window",
+        )
+
+    event_read = await _persist_proctoring_event(
+        db,
+        session=session,
+        policy=policy,
+        event_type=payload.event_type,
+        severity=severity,
+        metadata=metadata,
+        client_timestamp=payload.client_timestamp,
+        enforce_cooldown=False,
+    )
+    assert event_read is not None
 
     await _maybe_flag_session(db, session, policy)
+    return event_read
 
-    return _event_to_read(event)
+
+async def record_events_batch(
+    db: AsyncSession,
+    payload: ProctoringEventBatchCreate,
+) -> ProctoringEventBatchResponse:
+    """Persist multiple integrity events, skipping cooldown/disabled entries."""
+    session = await _get_session_or_404(db, payload.session_id)
+    if session.status in _TERMINAL_SESSION_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="session is no longer active",
+        )
+
+    policy = await resolve_policy(db, session)
+    recorded: list[ProctoringEventRead] = []
+    skipped: list[dict[str, Any]] = []
+
+    for item in payload.events:
+        if item.session_id != payload.session_id:
+            skipped.append(
+                {
+                    "event_type": item.event_type,
+                    "reason": "session_id mismatch",
+                }
+            )
+            continue
+
+        try:
+            prepared = await _prepare_client_event(item, policy)
+        except HTTPException as exc:
+            skipped.append(
+                {
+                    "event_type": item.event_type,
+                    "reason": str(exc.detail),
+                }
+            )
+            continue
+
+        if prepared is None:
+            skipped.append(
+                {
+                    "event_type": item.event_type,
+                    "reason": "disabled",
+                }
+            )
+            continue
+
+        severity, metadata = prepared
+        event_read = await _persist_proctoring_event(
+            db,
+            session=session,
+            policy=policy,
+            event_type=item.event_type,
+            severity=severity,
+            metadata=metadata,
+            client_timestamp=item.client_timestamp,
+            enforce_cooldown=True,
+        )
+        if event_read is None:
+            skipped.append(
+                {
+                    "event_type": item.event_type,
+                    "reason": "cooldown",
+                }
+            )
+            continue
+        recorded.append(event_read)
+
+    if recorded:
+        await _maybe_flag_session(db, session, policy)
+
+    return ProctoringEventBatchResponse(recorded=recorded, skipped=skipped)
 
 
 async def get_session_events(
@@ -313,4 +552,156 @@ async def verify_identity(
         match_score=match.score,
         verification_status=verification_status,
         message="identity verified",
+    )
+
+
+async def analyze_camera(
+    db: AsyncSession,
+    payload: CameraAnalyzeRequest,
+) -> CameraAnalyzeResponse:
+    """Analyze a live camera frame with the VLM and record violations."""
+    session = await _get_session_or_404(db, payload.session_id)
+
+    if session.status in _TERMINAL_SESSION_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="session is no longer active",
+        )
+
+    profile = _parse_json_dict(session.learner_profile_json)
+    if not profile.get("consent_given"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="camera consent is required before camera proctoring",
+        )
+
+    settings = get_proctoring_settings()
+    if not settings.vlm_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="vision proctoring is not configured (set LITELLM_API_KEY)",
+        )
+
+    try:
+        analysis, violations = await analyze_camera_frame(
+            payload.frame_b64,
+            reference_b64=payload.reference_image_b64,
+            match_threshold=settings.FACE_MATCH_THRESHOLD,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except IdentityUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    policy = await resolve_policy(db, session)
+    recorded: list[ProctoringEventRead] = []
+
+    for violation in violations:
+        metadata: dict[str, Any] = {
+            "description": violation.description,
+            "face_count": analysis.face_count,
+            "face_visible": analysis.face_visible,
+        }
+        if analysis.identity_match_score is not None:
+            metadata["identity_match_score"] = analysis.identity_match_score
+
+        event_read = await _persist_proctoring_event(
+            db,
+            session=session,
+            policy=policy,
+            event_type=violation.event_type,
+            severity=violation.severity,
+            metadata=metadata,
+            client_timestamp=payload.client_timestamp,
+            enforce_cooldown=True,
+        )
+        if event_read is not None:
+            recorded.append(event_read)
+
+    if recorded:
+        await _maybe_flag_session(db, session, policy)
+
+    violation_reads = [
+        CameraViolationRead(
+            event_type=violation.event_type,
+            severity=violation.severity,
+            description=violation.description,
+        )
+        for violation in violations
+    ]
+
+    return CameraAnalyzeResponse(
+        compliant=len(violations) == 0,
+        face_visible=analysis.face_visible,
+        face_count=analysis.face_count,
+        identity_match_score=analysis.identity_match_score,
+        violations=violation_reads,
+        events_recorded=recorded,
+    )
+
+
+async def analyze_audio(
+    db: AsyncSession,
+    payload: AudioAnalyzeRequest,
+) -> AudioAnalyzeResponse:
+    """Evaluate client-reported microphone metrics and record violations."""
+    session = await _get_session_or_404(db, payload.session_id)
+
+    if session.status in _TERMINAL_SESSION_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="session is no longer active",
+        )
+
+    profile = _parse_json_dict(session.learner_profile_json)
+    if not profile.get("consent_given"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="consent is required before audio proctoring",
+        )
+
+    policy = await resolve_policy(db, session)
+    violations = analyze_audio_signal(
+        average_rms=payload.average_rms,
+        microphone_muted=payload.microphone_muted,
+        microphone_enabled=payload.microphone_enabled,
+    )
+
+    recorded: list[ProctoringEventRead] = []
+    for violation in violations:
+        event_read = await _persist_proctoring_event(
+            db,
+            session=session,
+            policy=policy,
+            event_type=violation.event_type,
+            severity=violation.severity,
+            metadata={"description": violation.description, "average_rms": payload.average_rms},
+            client_timestamp=payload.client_timestamp,
+            enforce_cooldown=True,
+        )
+        if event_read is not None:
+            recorded.append(event_read)
+
+    if recorded:
+        await _maybe_flag_session(db, session, policy)
+
+    violation_reads = [
+        AudioViolationRead(
+            event_type=violation.event_type,
+            severity=violation.severity,
+            description=violation.description,
+        )
+        for violation in violations
+    ]
+
+    return AudioAnalyzeResponse(
+        compliant=len(violations) == 0,
+        violations=violation_reads,
+        events_recorded=recorded,
     )

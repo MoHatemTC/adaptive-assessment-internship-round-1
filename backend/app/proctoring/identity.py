@@ -123,6 +123,7 @@ class AzureFaceMatchProvider:
 def get_face_match_provider() -> FaceMatchProvider:
     """Return the configured face-match provider."""
     from app.proctoring.hf_face import HuggingFaceArcFaceMatchProvider
+    from app.proctoring.vlm_face import VLMFaceMatchProvider
 
     settings = get_proctoring_settings()
     provider = settings.FACE_PROVIDER
@@ -131,9 +132,13 @@ def get_face_match_provider() -> FaceMatchProvider:
         return AzureFaceMatchProvider(settings)
     if provider == "huggingface":
         return HuggingFaceArcFaceMatchProvider(settings)
+    if provider == "vlm":
+        return VLMFaceMatchProvider(settings)
 
+    if settings.vlm_configured:
+        return VLMFaceMatchProvider(settings)
     if settings.hf_face_configured:
         return HuggingFaceArcFaceMatchProvider(settings)
     if settings.face_api_configured:
         return AzureFaceMatchProvider(settings)
-    return HuggingFaceArcFaceMatchProvider(settings)
+    return VLMFaceMatchProvider(settings)

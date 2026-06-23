@@ -35,7 +35,7 @@ class ProctoringEvent(Base):
     session_id: Mapped[str] = mapped_column(String(36), nullable=False)
     # FK deferred until assessment_sessions table exists
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    # "tab_switch" / "copy_paste" / "screenshot" / "ai_usage" / "identity_fail"
+    # Canonical values are defined in app.proctoring.events_catalog.
     severity: Mapped[str] = mapped_column(String(16), nullable=False)
     # "low" / "medium" / "high"
     metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
