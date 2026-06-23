@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CodeEditor } from "@/features/code/CodeEditor";
+import { IntegrityMonitor } from "@/features/proctoring";
 import {
   generateCodeChallenge,
   listCodeLanguages,
@@ -24,10 +25,26 @@ function newSessionId(): string {
 
 export interface CodeChallengeViewProps {
   initialChallengeId?: number;
+  initialSessionId?: string;
+  assessmentId?: string;
+  /** Enable browser + camera integrity monitoring for the session. */
+  enableProctoring?: boolean;
+  onSessionComplete?: (payload: {
+    reason: "learner" | "adaptive";
+    questionsAnswered: number;
+    sessionId: string;
+    assessmentId: string;
+  }) => void;
 }
 
-export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps) {
-  const [sessionId, setSessionId] = useState(newSessionId);
+export function CodeChallengeView({
+  initialChallengeId,
+  initialSessionId,
+  assessmentId = DEFAULT_ASSESSMENT_ID,
+  enableProctoring = false,
+  onSessionComplete,
+}: CodeChallengeViewProps) {
+  const [sessionId, setSessionId] = useState(initialSessionId ?? newSessionId);
   const [languages, setLanguages] = useState<CodeLanguage[]>([]);
   const [language, setLanguage] = useState<SupportedLanguage>("python");
   const [challenge, setChallenge] = useState<ChallengeRead | null>(null);
@@ -48,7 +65,7 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
       try {
         const result = await generateCodeChallenge({
           session_id: sessionId,
-          assessment_id: DEFAULT_ASSESSMENT_ID,
+          assessment_id: assessmentId,
           contract: contract ?? undefined,
           language,
         });
@@ -64,7 +81,7 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
         throw err;
       }
     },
-    [language, sessionId],
+    [assessmentId, language, sessionId],
   );
 
   useEffect(() => {
@@ -101,6 +118,19 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
   }, [loadGeneratedChallenge]);
 
   const startNewSession = useCallback(() => {
+    if (initialSessionId) {
+      setChallenge(null);
+      setQuestionIndex(0);
+      setDifficulty("beginner");
+      setActiveContract(null);
+      setQuestionsAnswered(0);
+      setSessionEnded(false);
+      setSessionStarted(false);
+      setEndReason(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setSessionId(newSessionId());
     setChallenge(null);
     setQuestionIndex(0);
@@ -112,7 +142,7 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
     setEndReason(null);
     setError(null);
     setLoading(false);
-  }, []);
+  }, [initialSessionId]);
 
   const handleEndSession = useCallback(() => {
     const answered = questionsAnswered;
@@ -125,7 +155,13 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
     setEndReason("learner");
     setChallenge(null);
     setGeneratingNext(false);
-  }, [questionsAnswered]);
+    onSessionComplete?.({
+      reason: "learner",
+      questionsAnswered,
+      sessionId,
+      assessmentId,
+    });
+  }, [assessmentId, onSessionComplete, questionsAnswered, sessionId]);
 
   const handleSubmitted = useCallback(
     async ({ contract }: { contract: AdaptiveContract }) => {
@@ -135,6 +171,12 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
         setSessionEnded(true);
         setEndReason("adaptive");
         setChallenge(null);
+        onSessionComplete?.({
+          reason: "adaptive",
+          questionsAnswered: contract.question_index,
+          sessionId,
+          assessmentId,
+        });
         return;
       }
       setGeneratingNext(true);
@@ -147,7 +189,7 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
         setGeneratingNext(false);
       }
     },
-    [loadGeneratedChallenge],
+    [assessmentId, loadGeneratedChallenge, onSessionComplete, sessionId],
   );
 
   const sessionLabel = useMemo(() => sessionId.slice(0, 8), [sessionId]);
@@ -204,7 +246,12 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <IntegrityMonitor
+      sessionId={sessionId}
+      enabled={enableProctoring && sessionStarted && !sessionEnded}
+      showBadge={enableProctoring}
+    >
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold text-neutral">Adaptive coding</h1>
@@ -213,7 +260,7 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
             saves your response and prepares the next question silently.
           </p>
           <p className="text-xs text-neutral/50">
-            Session {sessionLabel}… · assessment {DEFAULT_ASSESSMENT_ID}
+            Session {sessionLabel}… · assessment {assessmentId}
             {questionsAnswered > 0 && ` · ${questionsAnswered} submitted`}
           </p>
         </div>
@@ -224,14 +271,14 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
             </span>
           )}
           {challenge && (
-          <button
-            type="button"
-            onClick={handleEndSession}
-            disabled={generatingNext}
-            className="rounded-lg border border-error/30 bg-white px-3 py-2 text-sm font-medium text-error transition hover:bg-error/5 disabled:opacity-50"
-          >
-            End session
-          </button>
+            <button
+              type="button"
+              onClick={handleEndSession}
+              disabled={generatingNext}
+              className="rounded-lg border border-error/30 bg-white px-3 py-2 text-sm font-medium text-error transition hover:bg-error/5 disabled:opacity-50"
+            >
+              End session
+            </button>
           )}
         </div>
       </header>
@@ -269,7 +316,7 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
           key={`${sessionId}-${challenge.id}-${questionIndex}-${difficulty}`}
           challenge={challenge}
           sessionId={sessionId}
-          assessmentId={DEFAULT_ASSESSMENT_ID}
+          assessmentId={assessmentId}
           questionIndex={questionIndex}
           difficulty={difficulty}
           onSubmitted={handleSubmitted}
@@ -297,6 +344,7 @@ export function CodeChallengeView({ initialChallengeId }: CodeChallengeViewProps
           </button>
         </div>
       )}
-    </div>
+      </div>
+    </IntegrityMonitor>
   );
 }

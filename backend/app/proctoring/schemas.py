@@ -1,0 +1,43 @@
+"""Re-export shared proctoring contracts for feature-local imports."""
+
+from app.shared.schemas.proctoring import (
+    AudioAnalyzeRequest,
+    AudioAnalyzeResponse,
+    AudioViolationRead,
+    CameraAnalyzeRequest,
+    CameraAnalyzeResponse,
+    CameraViolationRead,
+    IdentityVerifyRequest,
+    IdentityVerifyResponse,
+    ProctoringEventBatchCreate,
+    ProctoringEventBatchResponse,
+    ProctoringEventCreate,
+    ProctoringEventRead,
+    ProctoringPolicyResponse,
+    ProctoringPolicy,
+    ProctoringSeverity,
+    ProctoringEventType,
+    SessionIntegritySummary,
+    VerificationStatus,
+)
+
+__all__ = [
+    "AudioAnalyzeRequest",
+    "AudioAnalyzeResponse",
+    "AudioViolationRead",
+    "CameraAnalyzeRequest",
+    "CameraAnalyzeResponse",
+    "CameraViolationRead",
+    "IdentityVerifyRequest",
+    "IdentityVerifyResponse",
+    "ProctoringEventBatchCreate",
+    "ProctoringEventBatchResponse",
+    "ProctoringEventCreate",
+    "ProctoringEventRead",
+    "ProctoringEventType",
+    "ProctoringPolicy",
+    "ProctoringPolicyResponse",
+    "ProctoringSeverity",
+    "SessionIntegritySummary",
+    "VerificationStatus",
+]
