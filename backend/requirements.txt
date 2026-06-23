@@ -56,6 +56,12 @@ pytest==8.4.0
 pytest-asyncio==0.25.3
 httpx==0.28.1
 
+# ── Proctoring / face verification ───────────────────────────
+huggingface-hub==0.34.4
+onnxruntime==1.22.1
+numpy==2.2.6
+pillow==11.2.1
+
 # ── Linting / Type Checking ──────────────────────────────────
 ruff==0.11.12
 mypy==1.16.0
