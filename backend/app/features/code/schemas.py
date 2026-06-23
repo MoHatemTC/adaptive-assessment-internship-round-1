@@ -3,8 +3,9 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from app.features.code.languages import normalize_language
 from app.features.code.models import SubmissionStatus
 from app.shared.schemas.memory import AdaptiveContract, DifficultyLevel
 
@@ -12,6 +13,11 @@ __all__ = [
     "AdaptiveContract",
     "AdaptiveSubmitRequest",
     "AdaptiveSubmitResponse",
+    "CodeToolInput",
+    "CodeToolOutput",
+    "GenerateChallengeRequest",
+    "GenerateChallengeResponse",
+    "LlmRubricSummary",
 ]
 
 
@@ -111,7 +117,31 @@ class TestCaseDTO(BaseModel):
 class ExecutionOutcome(str, Enum):
     SUCCESS = "success"
     SANDBOX_ERROR = "sandbox_error"
+    SANDBOX_TIMEOUT = "sandbox_timeout"
     SANDBOX_UNAVAILABLE = "sandbox_unavailable"
+
+
+class CodeToolInput(BaseModel):
+    """Typed input passed from the examiner agent to the coding BaseTool."""
+
+    challenge_id: int
+    session_id: str = Field(min_length=1, max_length=64)
+    assessment_id: str = Field(min_length=1, max_length=64)
+    submitted_code: str = Field(min_length=1)
+    question_index: int = Field(ge=0)
+    difficulty: DifficultyLevel
+
+
+class CodeToolOutput(BaseModel):
+    """Silent structured output returned to the examiner agent.
+
+    No grading rubric, score, memory-card detail, or test output is exposed here.
+    The platform tables remain the source of truth for those private records.
+    """
+
+    received: bool
+    submission_id: int
+    contract: AdaptiveContract
 
 
 class AdaptiveSubmitRequest(BaseModel):
@@ -137,17 +167,52 @@ class AdaptiveSubmitRequest(BaseModel):
 class AdaptiveSubmitResponse(BaseModel):
     """Response from the adaptive submit endpoint.
 
-    Carries only learner-safe data plus the adaptive contract for the next
-    question. Raw ``grade_results`` / ``memory_cards`` are never exposed.
+    Carries only a learner-safe acknowledgement and adaptive contract. Official
+    grading, rubric, and memory details remain in platform tables.
 
     Attributes:
         submission_id: PK of the persisted ``code_submissions`` row.
-        passed: Whether the submission cleared the sandbox pass threshold.
-        score: Weighted sandbox score in ``[0, 1]``.
-        contract: The adaptive contract for the next question.
+        passed: Always ``None`` for official learner-facing submits.
+        score: Always ``None`` for official learner-facing submits.
+        llm_rubric: Always ``None`` during the learner session.
+        contract: Learner-safe adaptive contract for the next question.
+        next_challenge: Generated challenge when ``contract.stop`` is false.
     """
 
     submission_id: int
     passed: bool | None
     score: float | None
+    llm_rubric: "LlmRubricSummary | None" = None
+    contract: AdaptiveContract
+    next_challenge: ChallengeRead | None = None
+
+
+class LlmRubricSummary(BaseModel):
+    """Internal summary of the Layer 1 LLM rubric."""
+
+    approach_score: float = Field(ge=0.0, le=1.0)
+    approach_feedback: str
+    efficiency_score: float = Field(ge=0.0, le=1.0)
+    efficiency_feedback: str
+    overall: float = Field(ge=0.0, le=1.0)
+
+
+class GenerateChallengeRequest(BaseModel):
+    """Request the Generator Agent to author the next coding challenge."""
+
+    session_id: str = Field(min_length=1, max_length=64)
+    assessment_id: str = Field(min_length=1, max_length=64)
+    contract: AdaptiveContract | None = None
+    language: str = "python"
+
+    @field_validator("language")
+    @classmethod
+    def _validate_language(cls, value: str) -> str:
+        return normalize_language(value)
+
+
+class GenerateChallengeResponse(BaseModel):
+    """A freshly generated challenge plus the contract that shaped it."""
+
+    challenge: ChallengeRead
     contract: AdaptiveContract

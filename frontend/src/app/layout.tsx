@@ -9,8 +9,8 @@ const jakarta = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Sprints AI",
-  description: "Adaptive Assessment Platform",
+  title: "Masaar Assessment",
+  description: "Adaptive assessment platform",
 };
 
 export default function RootLayout({
@@ -20,7 +20,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${jakarta.variable} antialiased`}>{children}</body>
+      <body
+        className={`${jakarta.variable} min-h-screen bg-surface text-neutral antialiased`}
+      >
+        {children}
+      </body>
     </html>
   );
 }

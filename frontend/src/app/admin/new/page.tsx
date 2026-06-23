@@ -1,1 +1,3 @@
-export default function Page() { return null; }
+export default function AdminNewPage() {
+  return null;
+}

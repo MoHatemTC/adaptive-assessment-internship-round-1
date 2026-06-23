@@ -1,7 +1,7 @@
 """Add adaptive question columns to voice_sessions.
 
 Revision ID: 0008_voice_adaptive_columns
-Revises: 0002_code_memory_cards
+Revises: 0006_code_memory_card_evidence
 Create Date: 2026-06-17
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0008_voice_adaptive_columns"
-down_revision: Union[str, None] = "0002_code_memory_cards"
+down_revision: Union[str, None] = "0006_code_memory_card_evidence"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

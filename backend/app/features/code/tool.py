@@ -1,61 +1,76 @@
-"""E2B sandbox execution — pure execution layer (no DB, no HTTP, no LLM)."""
+"""Coding tool execution and examiner-agent wrapper.
+
+The low-level helpers in this module run learner code in E2B. ``CodeTool`` wraps
+the adaptive submit flow as a LangGraph ``BaseTool`` for the examiner agent and
+returns only a silent acknowledgement plus the next-question contract.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, TypedDict
 
-from app.features.code.schemas import ExecutionOutcome, TestCaseDTO, TestCaseResult
+from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
-RUNNER_BODY = '''
-from solution import solution
-import json, io, sys, traceback, time
-
-test_cases = json.loads(__TEST_CASES_JSON__)
-
-results = []
-for tc in test_cases:
-    try:
-        captured = io.StringIO()
-        sys.stdout = captured
-        start = time.monotonic()
-        exec(tc["input"], {"solution": solution})
-        elapsed = (time.monotonic() - start) * 1000
-        sys.stdout = sys.__stdout__
-        actual = captured.getvalue().strip()
-        results.append({
-            "test_case_id": tc["id"],
-            "passed": actual == tc["expected_output"].strip(),
-            "actual_output": actual,
-            "expected_output": tc["expected_output"],
-            "execution_time_ms": elapsed,
-            "error": None
-        })
-    except Exception:
-        sys.stdout = sys.__stdout__
-        results.append({
-            "test_case_id": tc["id"],
-            "passed": False,
-            "actual_output": "",
-            "expected_output": tc["expected_output"],
-            "execution_time_ms": 0.0,
-            "error": traceback.format_exc(limit=3)
-        })
-
-print(json.dumps(results))
-'''
+from app.core.base_tool import BaseTool
+from app.core.database import async_session
+from app.features.code.languages import build_runner_script, runner_path, solution_path
+from app.features.code.schemas import (
+    AdaptiveSubmitRequest,
+    CodeToolInput,
+    CodeToolOutput,
+    ExecutionOutcome,
+    TestCaseDTO,
+    TestCaseResult,
+)
 
 PASS_THRESHOLD = 0.6
-_SOLUTION_PATH = "/home/user/solution.py"
-_RUNNER_PATH = "/home/user/runner.py"
+
+
+class CodeToolState(TypedDict, total=False):
+    """LangGraph state for the examiner-agent coding tool."""
+
+    challenge_id: int
+    session_id: str
+    assessment_id: str
+    submitted_code: str
+    question_index: int
+    difficulty: str
+    received: bool
+    submission_id: int
+    contract: dict[str, Any]
+
+
+def _timeout_results(test_cases: list[TestCaseDTO], error: str) -> list[TestCaseResult]:
+    return [
+        TestCaseResult(
+            test_case_id=tc.id,
+            passed=False,
+            actual_output="",
+            expected_output=tc.expected_output,
+            execution_time_ms=0.0,
+            error=error,
+        )
+        for tc in test_cases
+    ]
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    message = str(exc).lower()
+    return "timed out" in message or "timeout" in message
 
 
 def _run_in_sandbox(
     submitted_code: str,
     test_cases: list[TestCaseDTO],
     timeout_seconds: int,
+    *,
+    language: str,
 ) -> tuple[ExecutionOutcome, list[TestCaseResult], str | None]:
     from e2b_code_interpreter import Sandbox
 
@@ -63,22 +78,30 @@ def _run_in_sandbox(
     if not api_key:
         return ExecutionOutcome.SANDBOX_UNAVAILABLE, [], "E2B_API_KEY not configured"
 
+    try:
+        config, runner_template = build_runner_script(language)
+    except ValueError as exc:
+        return ExecutionOutcome.SANDBOX_ERROR, [], str(exc)
+
     tc_json_literal = repr(json.dumps([tc.model_dump() for tc in test_cases]))
-    runner_script = RUNNER_BODY.replace("__TEST_CASES_JSON__", tc_json_literal)
+    runner_script = runner_template.replace("__TEST_CASES_JSON__", tc_json_literal)
 
     sandbox = None
     try:
         sandbox = Sandbox.create(timeout=timeout_seconds + 10, api_key=api_key)
-        sandbox.files.write(_SOLUTION_PATH, submitted_code)
-        sandbox.files.write(_RUNNER_PATH, runner_script)
+        sandbox.files.write(solution_path(config), submitted_code)
+        sandbox.files.write(runner_path(config), runner_script)
 
         command_result = sandbox.commands.run(
-            f"python {_RUNNER_PATH}",
+            config.run_command,
             timeout=timeout_seconds,
         )
 
         if command_result.exit_code != 0:
-            error_msg = command_result.stderr or f"Process exited with {command_result.exit_code}"
+            error_msg = (
+                command_result.stderr
+                or f"Process exited with {command_result.exit_code}"
+            )
             results = [
                 TestCaseResult(
                     test_case_id=tc.id,
@@ -99,7 +122,23 @@ def _run_in_sandbox(
         raw_results: list[dict[str, Any]] = json.loads(stdout)
         results = [TestCaseResult(**r) for r in raw_results]
         return ExecutionOutcome.SUCCESS, results, None
+    except TimeoutError as exc:
+        message = str(exc) or "Sandbox execution timed out"
+        return (
+            ExecutionOutcome.SANDBOX_TIMEOUT,
+            _timeout_results(test_cases, message),
+            message,
+        )
+    except ValueError as exc:
+        return ExecutionOutcome.SANDBOX_ERROR, [], str(exc)
     except Exception as exc:  # noqa: BLE001 — surface sandbox failures to caller
+        if _is_timeout_error(exc):
+            message = str(exc) or "Sandbox execution timed out"
+            return (
+                ExecutionOutcome.SANDBOX_TIMEOUT,
+                _timeout_results(test_cases, message),
+                message,
+            )
         return ExecutionOutcome.SANDBOX_UNAVAILABLE, [], str(exc)
     finally:
         if sandbox is not None:
@@ -117,18 +156,27 @@ async def execute_submission(
     timeout_seconds: int = 20,
 ) -> tuple[ExecutionOutcome, list[TestCaseResult], str | None]:
     """Execute learner code against test cases in an E2B sandbox."""
-    if language != "python":
-        return ExecutionOutcome.SANDBOX_ERROR, [], f"Unsupported language: {language}"
-
     if not test_cases:
         return ExecutionOutcome.SANDBOX_ERROR, [], "No test cases provided"
 
-    return await asyncio.to_thread(
-        _run_in_sandbox,
-        submitted_code,
-        test_cases,
-        timeout_seconds,
-    )
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _run_in_sandbox,
+                submitted_code,
+                test_cases,
+                timeout_seconds,
+                language=language,
+            ),
+            timeout=max(1, timeout_seconds) + 15,
+        )
+    except TimeoutError as exc:
+        message = str(exc) or "Sandbox execution timed out"
+        return (
+            ExecutionOutcome.SANDBOX_TIMEOUT,
+            _timeout_results(test_cases, message),
+            message,
+        )
 
 
 def compute_weighted_score(
@@ -141,12 +189,17 @@ def compute_weighted_score(
     if total_weight <= 0:
         return 0.0
     passed_weight = sum(
-        tc.weight for tc, result in zip(test_cases, results, strict=False) if result.passed
+        tc.weight
+        for tc, result in zip(test_cases, results, strict=False)
+        if result.passed
     )
     return round(passed_weight / total_weight, 3)
 
 
-def build_rubric_scores(results: list[TestCaseResult], overall_score: float) -> list[dict[str, Any]]:
+def build_rubric_scores(
+    results: list[TestCaseResult],
+    overall_score: float,
+) -> list[dict[str, Any]]:
     avg_exec_ms = (
         sum(r.execution_time_ms for r in results) / len(results) if results else 0.0
     )
@@ -201,3 +254,42 @@ def filter_visible_results(
         else:
             visible.append(result)
     return visible
+
+
+class CodeTool(BaseTool):
+    """Examiner-agent tool for adaptive coding submissions."""
+
+    @property
+    def tool_name(self) -> str:
+        return "code_tool"
+
+    @property
+    def tool_description(self) -> str:
+        return (
+            "Executes a coding answer in the E2B sandbox, silently persists grading "
+            "and memory records, and returns the next adaptive contract."
+        )
+
+    def build_graph(self) -> CompiledStateGraph:
+        graph = StateGraph(CodeToolState)
+        graph.add_node("submit_code", self._submit_code)
+        graph.set_entry_point("submit_code")
+        graph.add_edge("submit_code", END)
+        return graph.compile()
+
+    async def _submit_code(self, state: CodeToolState) -> dict[str, Any]:
+        from app.features.code import service
+
+        input_state = CodeToolInput.model_validate(state)
+        async with async_session() as db:
+            response = await service.adaptive_submit(
+                db,
+                AdaptiveSubmitRequest(**input_state.model_dump()),
+            )
+
+        output = CodeToolOutput(
+            received=True,
+            submission_id=response.submission_id,
+            contract=response.contract,
+        )
+        return output.model_dump()

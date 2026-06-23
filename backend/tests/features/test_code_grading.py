@@ -46,6 +46,21 @@ def test_compose_rubric_prepends_correctness_and_blends_overall():
     ]
 
 
+def test_normalize_llm_rubric_scales_down_five_point_scores():
+    raw = RubricScores.model_construct(
+        dimensions=[
+            RubricDimension.model_construct(name="Approach", score=2, feedback="ok"),
+            RubricDimension.model_construct(name="efficiency", score=5, feedback="great"),
+        ],
+        overall=3.5,
+    )
+    normalized = grading._normalize_llm_rubric(raw)
+    assert normalized.dimensions[0].name == "approach"
+    assert normalized.dimensions[0].score == 0.4
+    assert normalized.dimensions[1].score == 1.0
+    assert normalized.overall == 0.7
+
+
 @pytest.mark.asyncio
 async def test_grade_submission_writes_grade_result(monkeypatch):
     async def _fake_llm(**kwargs) -> RubricScores:

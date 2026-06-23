@@ -61,7 +61,22 @@ async def _run(session_id: str) -> None:
             status=SubmissionStatus.COMPLETED,
             score=1.0,
             passed=True,
-            grading_metadata=json.dumps({"passed_tests": 4, "total_tests": 4}),
+            grading_metadata=json.dumps(
+                {
+                    "passed_tests": 4,
+                    "total_tests": 4,
+                    "all_test_results": [
+                        {
+                            "test_case_id": "1",
+                            "passed": True,
+                            "actual_output": "olleh",
+                            "expected_output": "olleh",
+                            "execution_time_ms": 1.0,
+                            "error": None,
+                        }
+                    ],
+                }
+            ),
         )
         db.add(submission)
         await db.flush()
@@ -109,6 +124,8 @@ async def _run(session_id: str) -> None:
         assert detail.memory_card_id == memory_rows[0].id
         assert detail.submission_id == submission.id
         assert detail.sandbox_score == 1.0
+        assert detail.overall_rubric_score == 0.85
+        assert json.loads(detail.test_results)[0]["test_case_id"] == "1"
         assert detail.approach_feedback == "Clear slice."
         assert detail.efficiency_feedback == "Linear time."
 
