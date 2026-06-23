@@ -34,7 +34,11 @@ _logger = get_logger(__name__)
 _FEATURES_PACKAGE = "app.features"
 
 #: Standalone modules outside ``app.features`` that may expose a ``router``.
-_STANDALONE_ROUTER_MODULES = ("app.admin.api", "app.sessions.api")
+_STANDALONE_ROUTER_MODULES = (
+    "app.admin.api",
+    "app.sessions.api",
+    "app.proctoring.api",
+)
 
 
 def _include_router(app: FastAPI, module_path: str) -> None:

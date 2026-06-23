@@ -166,7 +166,7 @@ Integrity events recorded in parallel during any tool session. Session key is th
 |--------|------|----------|------------|-------|
 | `id` | INTEGER | NO | PK, auto-increment | |
 | `session_id` | VARCHAR(36) | NO | NOT NULL, INDEX | Deferred FK → `assessment_sessions.id` |
-| `event_type` | VARCHAR(32) | NO | | `tab_switch` / `copy_paste` / `screenshot` / `ai_usage` / `identity_fail` |
+| `event_type` | VARCHAR(32) | NO | | `tab_switch` / `copy_paste` / `screenshot` / `ai_usage` / `identity_fail` / `identity_verified` |
 | `severity` | VARCHAR(16) | NO | | `low` / `medium` / `high` |
 | `metadata` | JSONB | YES | | Extra context (browser info, timestamps, etc.) |
 | `client_timestamp` | TIMESTAMPTZ | YES | | Browser-reported time |
