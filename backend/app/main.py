@@ -28,6 +28,7 @@ from app.core.database import check_db_connection
 from app.core.limiter import limiter
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import setup_middleware
+from app.shared.qdrant import ensure_collections_exist
 
 _logger = get_logger(__name__)
 
@@ -110,6 +111,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     _logger.info("app_startup_started")
     await setup_checkpointer()
+    try:
+        await ensure_collections_exist()
+    except Exception:
+        _logger.warning(
+            "qdrant_startup_failed",
+            reason="Qdrant unavailable at startup — continuing without it",
+        )
     _logger.info("app_startup_complete")
     yield
     _logger.info("app_shutdown_complete")

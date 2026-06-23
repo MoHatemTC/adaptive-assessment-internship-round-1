@@ -78,8 +78,8 @@ class Settings(BaseSettings):
     TRANSCRIPTION_MODEL: str = "azure/whisper"
 
     # ── Vector database ───────────────────────────────────────────────────────
-    QDRANT_URL: str
-    QDRANT_API_KEY: SecretStr
+    QDRANT_URL: str = ""
+    QDRANT_API_KEY: str = ""
 
     # ── Observability ─────────────────────────────────────────────────────────
     LANGFUSE_PUBLIC_KEY: SecretStr
