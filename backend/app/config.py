@@ -46,7 +46,8 @@ class Settings(BaseSettings):
             string means use the provider's default endpoint.
         LITELLM_MODEL: Default model identifier used when a caller does not
             specify one explicitly.
-        DEEPGRAM_API_KEY: API key for the Deepgram speech-to-text service.
+        TRANSCRIPTION_MODEL: LiteLLM model identifier used for speech-to-text
+            transcription (e.g. ``"azure/whisper"``).
         QDRANT_URL: Base URL of the Qdrant vector database.
         QDRANT_API_KEY: API key for Qdrant (may be empty for local instances).
         LANGFUSE_PUBLIC_KEY: Langfuse public key for observability tracing.
@@ -73,7 +74,8 @@ class Settings(BaseSettings):
     LITELLM_MODEL: str = "gpt-4o"
 
     # ── Speech-to-text ────────────────────────────────────────────────────────
-    DEEPGRAM_API_KEY: SecretStr
+    # The correct env var name confirmed by the infrastructure team
+    TRANSCRIPTION_MODEL: str = "azure/whisper"
 
     # ── Vector database ───────────────────────────────────────────────────────
     QDRANT_URL: str
