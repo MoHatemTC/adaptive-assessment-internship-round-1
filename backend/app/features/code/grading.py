@@ -21,6 +21,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.llm import get_llm_with_tracing
 from app.core.logging import get_logger
+from app.features.code.llm_json import (
+    extract_json as _extract_json,
+    extract_llm_text as _extract_llm_text,
+)
 from app.features.code.languages import get_language_config
 from app.features.code.models import CodeChallenge, CodeSubmission
 from app.sessions.models import GradeResult
@@ -38,7 +42,12 @@ class LLMGradingUnavailable(RuntimeError):
 def _is_llm_unavailable(exc: BaseException) -> bool:
     """Return True when ``exc`` indicates the LLM provider is unreachable or rejected."""
     name = type(exc).__name__
-    if name in {"AuthenticationError", "APIConnectionError", "RateLimitError", "ServiceUnavailableError"}:
+    if name in {
+        "AuthenticationError",
+        "APIConnectionError",
+        "RateLimitError",
+        "ServiceUnavailableError",
+    }:
         return True
     cause = exc.__cause__
     return _is_llm_unavailable(cause) if cause is not None else False
@@ -112,18 +121,14 @@ async def _grade_with_llm(
     passed_tests: int,
     total_tests: int,
 ) -> RubricScores:
-    """Run the approach/efficiency rubric through the traced LLM.
+    """Run the approach/efficiency rubric through the traced LLM."""
+    from app.config import get_settings
+    from app.features.code.llm_json import (
+        LLMJsonUnavailable,
+        invoke_json_model,
+        prefers_raw_json_model,
+    )
 
-    Uses LangChain structured output for reliable JSON, normalises scores that
-    arrive on a 1–5 or 1–10 scale, and retries once on parse failure. Isolated
-    so tests can substitute a deterministic result without a live model call.
-
-    Returns:
-        The parsed :class:`RubricScores` from the model.
-    """
-    llm, callbacks = get_llm_with_tracing()
-    # Structured output is unreliable with streaming enabled on some providers.
-    structured = llm.bind(streaming=False).with_structured_output(RubricScores)
     prompt = _build_rubric_prompt(
         title=title,
         description=description,
@@ -137,6 +142,27 @@ async def _grade_with_llm(
         ("system", _RUBRIC_SYSTEM_PROMPT),
         ("human", prompt),
     ]
+
+    model = get_settings().LITELLM_MODEL
+    if prefers_raw_json_model(model):
+        try:
+            rubric = await invoke_json_model(
+                model_cls=RubricScores,
+                messages=[
+                    *messages,
+                    (
+                        "human",
+                        "Return ONLY JSON with dimensions (approach, efficiency) and "
+                        "overall. Scores must be floats in [0.0, 1.0]. No reasoning.",
+                    ),
+                ],
+            )
+        except LLMJsonUnavailable as exc:
+            raise LLMGradingUnavailable(str(exc)) from exc
+        return _normalize_llm_rubric(rubric)
+
+    llm, callbacks = get_llm_with_tracing()
+    structured = llm.with_structured_output(RubricScores)
 
     last_error: Exception | None = None
     for attempt in range(2):
@@ -163,16 +189,18 @@ async def _grade_with_llm(
                 ) from exc
             raise
 
-    # Fallback: raw invoke + best-effort JSON extraction (older code path).
     try:
-        response = await llm.bind(streaming=False).ainvoke(
-            messages, config={"callbacks": callbacks}
+        rubric = await invoke_json_model(
+            model_cls=RubricScores,
+            messages=[*messages, ("human", _RUBRIC_RETRY_PROMPT)],
         )
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        rubric = RubricScores.model_validate_json(_extract_json(content))
         return _normalize_llm_rubric(rubric)
+    except LLMJsonUnavailable as exc:
+        raise LLMGradingUnavailable(str(exc)) from exc
     except (ValidationError, json.JSONDecodeError) as exc:
         raise RuntimeError("LLM rubric grading failed after retries") from (last_error or exc)
+    except LLMGradingUnavailable:
+        raise
     except Exception as exc:
         if _is_llm_unavailable(exc):
             raise LLMGradingUnavailable(
@@ -205,25 +233,6 @@ def _normalize_llm_rubric(rubric: RubricScores) -> RubricScores:
     ]
     overall = _normalize_unit_score(rubric.overall)
     return RubricScores(dimensions=dimensions, overall=overall)
-
-
-def _extract_json(content: str) -> str:
-    """Best-effort extraction of a JSON object from an LLM response.
-
-    Tolerates models that wrap JSON in markdown fences or surrounding prose.
-
-    Args:
-        content: Raw model output.
-
-    Returns:
-        The JSON substring (from the first ``{`` to the last ``}``), or the
-        original content if no braces are found.
-    """
-    start = content.find("{")
-    end = content.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return content[start : end + 1]
-    return content
 
 
 def _compose_rubric(sandbox_score: float, llm_rubric: RubricScores) -> RubricScores:
@@ -261,24 +270,47 @@ async def grade_submission(
     session_id: str,
     question_index: int,
 ) -> GradeResult:
-    """Grade a code submission and persist one ``grade_results`` row.
+    """Grade a code submission with the full LLM rubric and persist ``grade_results``."""
+    submission, challenge, sandbox_score, passed_tests, total_tests = (
+        await _load_submission_grade_context(db, submission_id)
+    )
+    llm_rubric = await _grade_with_llm(
+        title=challenge.title,
+        description=challenge.description,
+        language=challenge.language,
+        submitted_code=submission.submitted_code,
+        sandbox_score=sandbox_score,
+        passed_tests=passed_tests,
+        total_tests=total_tests,
+    )
+    rubric = _compose_rubric(sandbox_score, llm_rubric)
+    return await _persist_grade_result(
+        db,
+        session_id=session_id,
+        submission_id=submission_id,
+        question_index=question_index,
+        rubric=rubric,
+    )
 
-    Combines the E2B sandbox score (already stored on the submission) with an
-    LLM rubric on approach/efficiency. The score is never surfaced to the
-    learner.
 
-    Args:
-        db: Active async database session.
-        submission_id: PK of the ``code_submissions`` row to grade.
-        session_id: Platform assessment session UUID.
-        question_index: Zero-based position in the assessment blueprint.
+def _sandbox_heuristic_rubric(sandbox_score: float, *, passed: bool) -> RubricScores:
+    """Fast rubric estimate from sandbox output while LLM grading runs in background."""
+    approach = sandbox_score if passed else max(0.0, sandbox_score * 0.7)
+    efficiency = max(0.0, sandbox_score * 0.9)
+    pending = "Awaiting detailed LLM review."
+    return RubricScores(
+        dimensions=[
+            RubricDimension(name="approach", score=approach, feedback=pending),
+            RubricDimension(name="efficiency", score=efficiency, feedback=pending),
+        ],
+        overall=round((approach + efficiency) / 2, 3),
+    )
 
-    Returns:
-        The persisted :class:`~app.sessions.models.GradeResult` row.
 
-    Raises:
-        HTTPException: 404 if the submission or its challenge is missing.
-    """
+async def _load_submission_grade_context(
+    db: AsyncSession,
+    submission_id: int,
+) -> tuple[CodeSubmission, CodeChallenge, float, int, int]:
     submission = (
         await db.exec(select(CodeSubmission).where(CodeSubmission.id == submission_id))
     ).first()
@@ -303,18 +335,17 @@ async def grade_submission(
     sandbox_score = submission.score if submission.score is not None else 0.0
     passed_tests = int(metadata.get("passed_tests", 0))
     total_tests = int(metadata.get("total_tests", 0))
+    return submission, challenge, sandbox_score, passed_tests, total_tests
 
-    llm_rubric = await _grade_with_llm(
-        title=challenge.title,
-        description=challenge.description,
-        language=challenge.language,
-        submitted_code=submission.submitted_code,
-        sandbox_score=sandbox_score,
-        passed_tests=passed_tests,
-        total_tests=total_tests,
-    )
-    rubric = _compose_rubric(sandbox_score, llm_rubric)
 
+async def _persist_grade_result(
+    db: AsyncSession,
+    *,
+    session_id: str,
+    submission_id: int,
+    question_index: int,
+    rubric: RubricScores,
+) -> GradeResult:
     grade = GradeResult(
         session_id=session_id,
         tool_type=TOOL_TYPE,
@@ -336,4 +367,67 @@ async def grade_submission(
     return grade
 
 
-__all__ = ["LLMGradingUnavailable", "grade_submission"]
+async def grade_submission_sandbox_only(
+    db: AsyncSession,
+    submission_id: int,
+    session_id: str,
+    question_index: int,
+) -> GradeResult:
+    """Persist a sandbox-derived rubric immediately; LLM refines it later."""
+    submission, _challenge, sandbox_score, _passed_tests, _total_tests = (
+        await _load_submission_grade_context(db, submission_id)
+    )
+    heuristic = _sandbox_heuristic_rubric(
+        sandbox_score,
+        passed=bool(submission.passed),
+    )
+    rubric = _compose_rubric(sandbox_score, heuristic)
+    return await _persist_grade_result(
+        db,
+        session_id=session_id,
+        submission_id=submission_id,
+        question_index=question_index,
+        rubric=rubric,
+    )
+
+
+async def upgrade_grade_with_llm(db: AsyncSession, grade_id: int) -> GradeResult:
+    """Replace a sandbox-heuristic grade with the full LLM rubric."""
+    grade = await db.get(GradeResult, grade_id)
+    if grade is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Grade result not found"
+        )
+
+    submission, challenge, sandbox_score, passed_tests, total_tests = (
+        await _load_submission_grade_context(db, int(grade.tool_session_id))
+    )
+    llm_rubric = await _grade_with_llm(
+        title=challenge.title,
+        description=challenge.description,
+        language=challenge.language,
+        submitted_code=submission.submitted_code,
+        sandbox_score=sandbox_score,
+        passed_tests=passed_tests,
+        total_tests=total_tests,
+    )
+    rubric = _compose_rubric(sandbox_score, llm_rubric)
+    grade.rubric_scores = rubric.model_dump_json()
+    db.add(grade)
+    await db.flush()
+
+    _logger.info(
+        "code_submission_grade_upgraded",
+        grade_id=grade_id,
+        submission_id=submission.id,
+        overall=rubric.overall,
+    )
+    return grade
+
+
+__all__ = [
+    "LLMGradingUnavailable",
+    "grade_submission",
+    "grade_submission_sandbox_only",
+    "upgrade_grade_with_llm",
+]

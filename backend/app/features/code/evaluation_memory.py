@@ -193,4 +193,66 @@ async def extract_memory_card(
     )
 
 
-__all__ = ["extract_memory_card"]
+async def refresh_memory_card_for_grade(
+    db: AsyncSession,
+    grade_result_id: int,
+    difficulty: str,
+) -> None:
+    """Update an existing memory card after deferred LLM grading completes."""
+    grade = await db.get(GradeResult, grade_result_id)
+    if grade is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Grade result not found"
+        )
+
+    submission = (
+        await db.exec(
+            select(CodeSubmission).where(CodeSubmission.id == grade.tool_session_id)
+        )
+    ).first()
+    if submission is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found"
+        )
+
+    detail = (
+        await db.exec(
+            select(CodeMemoryCard).where(
+                CodeMemoryCard.submission_id == (submission.id or 0)
+            )
+        )
+    ).first()
+    if detail is None:
+        return
+
+    rubric = RubricScores.model_validate_json(grade.rubric_scores)
+    sandbox_score = _dimension_score(rubric, "correctness")
+    approach_feedback = _dimension_feedback(rubric, "approach")
+    efficiency_feedback = _dimension_feedback(rubric, "efficiency")
+    evidence_summary = _build_evidence_summary(
+        passed=bool(submission.passed),
+        sandbox_score=sandbox_score,
+        approach_feedback=approach_feedback,
+        efficiency_feedback=efficiency_feedback,
+    )
+
+    detail.sandbox_score = sandbox_score
+    detail.overall_rubric_score = rubric.overall
+    detail.approach_feedback = approach_feedback
+    detail.efficiency_feedback = efficiency_feedback
+    db.add(detail)
+
+    memory_card = await db.get(MemoryCard, detail.memory_card_id)
+    if memory_card is not None:
+        memory_card.evidence_summary = evidence_summary
+        db.add(memory_card)
+
+    await db.flush()
+    _logger.info(
+        "code_memory_card_refreshed",
+        grade_result_id=grade_result_id,
+        submission_id=submission.id,
+    )
+
+
+__all__ = ["extract_memory_card", "refresh_memory_card_for_grade"]

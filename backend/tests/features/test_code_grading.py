@@ -33,6 +33,17 @@ def test_extract_json_handles_markdown_fence():
     }
 
 
+def test_extract_llm_text_skips_thinking_blocks():
+    content = [
+        {"type": "thinking", "thinking": "planning"},
+        {"type": "thinking", "thinking": " more"},
+        '```json\n{"title": "Hi", "description": "x" * 20, "starter_code": "pass", "test_cases": []}\n```',
+    ]
+    text = grading._extract_llm_text(content)
+    assert "planning" not in text
+    assert text.startswith("```json")
+
+
 def test_compose_rubric_prepends_correctness_and_blends_overall():
     composed = grading._compose_rubric(1.0, _llm_rubric())
     assert composed.dimensions[0].name == "correctness"

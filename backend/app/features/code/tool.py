@@ -10,6 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -65,19 +68,124 @@ def _is_timeout_error(exc: Exception) -> bool:
     return "timed out" in message or "timeout" in message
 
 
-def _run_in_sandbox(
+def _parse_runner_stdout(
+    stdout: str,
+    test_cases: list[TestCaseDTO],
+) -> tuple[ExecutionOutcome, list[TestCaseResult], str | None]:
+    if not stdout.strip():
+        return ExecutionOutcome.SANDBOX_ERROR, [], "Empty runner output"
+    try:
+        raw_results: list[dict[str, Any]] = json.loads(stdout)
+        results = [TestCaseResult(**r) for r in raw_results]
+        return ExecutionOutcome.SUCCESS, results, None
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return ExecutionOutcome.SANDBOX_ERROR, [], str(exc)
+
+
+def _sandbox_error_results(
+    test_cases: list[TestCaseDTO],
+    error_msg: str,
+) -> list[TestCaseResult]:
+    return [
+        TestCaseResult(
+            test_case_id=tc.id,
+            passed=False,
+            actual_output="",
+            expected_output=tc.expected_output,
+            execution_time_ms=0.0,
+            error=error_msg,
+        )
+        for tc in test_cases
+    ]
+
+
+def _use_local_sandbox_fallback() -> bool:
+    """Allow local execution when cloud sandbox is unavailable (dev only)."""
+    return os.environ.get("ENVIRONMENT", "development") == "development"
+
+
+def _create_e2b_sandbox(timeout_seconds: int, api_key: str):
+    """Create an E2B sandbox across SDK v1 (constructor) and v2 (``.create()``)."""
+    from e2b_code_interpreter import Sandbox
+
+    sandbox_timeout = timeout_seconds + 10
+    if hasattr(Sandbox, "create"):
+        return Sandbox.create(timeout=sandbox_timeout, api_key=api_key)
+    return Sandbox(timeout=sandbox_timeout, api_key=api_key)
+
+
+def _run_locally(
     submitted_code: str,
     test_cases: list[TestCaseDTO],
     timeout_seconds: int,
     *,
     language: str,
 ) -> tuple[ExecutionOutcome, list[TestCaseResult], str | None]:
-    from e2b_code_interpreter import Sandbox
+    """Execute learner code in a local subprocess (development fallback)."""
+    try:
+        config, runner_template = build_runner_script(language)
+    except ValueError as exc:
+        return ExecutionOutcome.SANDBOX_ERROR, [], str(exc)
 
-    api_key = os.environ.get("E2B_API_KEY", "")
-    if not api_key:
-        return ExecutionOutcome.SANDBOX_UNAVAILABLE, [], "E2B_API_KEY not configured"
+    tc_json_literal = repr(json.dumps([tc.model_dump() for tc in test_cases]))
+    runner_script = runner_template.replace("__TEST_CASES_JSON__", tc_json_literal)
+    if config.id == "javascript":
+        runner_script = runner_script.replace(
+            'require("/home/user/solution.js")',
+            'require("./solution.js")',
+        )
 
+    command = (
+        ["python", "runner.py"]
+        if config.id == "python"
+        else ["node", "runner.js"]
+    )
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="masaar-code-") as tmpdir:
+            workdir = Path(tmpdir)
+            solution_file = workdir / config.solution_filename
+            runner_file = workdir / config.runner_filename
+            solution_file.write_text(submitted_code, encoding="utf-8")
+            runner_file.write_text(runner_script, encoding="utf-8")
+
+            completed = subprocess.run(
+                command,
+                cwd=workdir,
+                capture_output=True,
+                text=True,
+                timeout=max(1, timeout_seconds),
+                check=False,
+            )
+    except subprocess.TimeoutExpired as exc:
+        message = str(exc) or "Sandbox execution timed out"
+        return (
+            ExecutionOutcome.SANDBOX_TIMEOUT,
+            _timeout_results(test_cases, message),
+            message,
+        )
+    except OSError as exc:
+        return ExecutionOutcome.SANDBOX_UNAVAILABLE, [], str(exc)
+
+    if completed.returncode != 0:
+        error_msg = completed.stderr.strip() or f"Process exited with {completed.returncode}"
+        return (
+            ExecutionOutcome.SANDBOX_ERROR,
+            _sandbox_error_results(test_cases, error_msg),
+            error_msg,
+        )
+
+    return _parse_runner_stdout(completed.stdout, test_cases)
+
+
+def _run_in_e2b(
+    submitted_code: str,
+    test_cases: list[TestCaseDTO],
+    timeout_seconds: int,
+    *,
+    language: str,
+    api_key: str,
+) -> tuple[ExecutionOutcome, list[TestCaseResult], str | None]:
     try:
         config, runner_template = build_runner_script(language)
     except ValueError as exc:
@@ -88,7 +196,7 @@ def _run_in_sandbox(
 
     sandbox = None
     try:
-        sandbox = Sandbox.create(timeout=timeout_seconds + 10, api_key=api_key)
+        sandbox = _create_e2b_sandbox(timeout_seconds, api_key)
         sandbox.files.write(solution_path(config), submitted_code)
         sandbox.files.write(runner_path(config), runner_script)
 
@@ -102,26 +210,13 @@ def _run_in_sandbox(
                 command_result.stderr
                 or f"Process exited with {command_result.exit_code}"
             )
-            results = [
-                TestCaseResult(
-                    test_case_id=tc.id,
-                    passed=False,
-                    actual_output="",
-                    expected_output=tc.expected_output,
-                    execution_time_ms=0.0,
-                    error=error_msg,
-                )
-                for tc in test_cases
-            ]
-            return ExecutionOutcome.SANDBOX_ERROR, results, error_msg
+            return (
+                ExecutionOutcome.SANDBOX_ERROR,
+                _sandbox_error_results(test_cases, error_msg),
+                error_msg,
+            )
 
-        stdout = (command_result.stdout or "").strip()
-        if not stdout:
-            return ExecutionOutcome.SANDBOX_ERROR, [], "Empty runner output"
-
-        raw_results: list[dict[str, Any]] = json.loads(stdout)
-        results = [TestCaseResult(**r) for r in raw_results]
-        return ExecutionOutcome.SUCCESS, results, None
+        return _parse_runner_stdout((command_result.stdout or "").strip(), test_cases)
     except TimeoutError as exc:
         message = str(exc) or "Sandbox execution timed out"
         return (
@@ -146,6 +241,59 @@ def _run_in_sandbox(
                 sandbox.kill()
             except Exception:  # noqa: BLE001 — best-effort cleanup
                 pass
+
+
+def _run_in_sandbox(
+    submitted_code: str,
+    test_cases: list[TestCaseDTO],
+    timeout_seconds: int,
+    *,
+    language: str,
+) -> tuple[ExecutionOutcome, list[TestCaseResult], str | None]:
+    api_key = os.environ.get("E2B_API_KEY", "")
+    if not api_key:
+        return _run_locally(
+            submitted_code,
+            test_cases,
+            timeout_seconds,
+            language=language,
+        )
+
+    try:
+        outcome, results, error = _run_in_e2b(
+            submitted_code,
+            test_cases,
+            timeout_seconds,
+            language=language,
+            api_key=api_key,
+        )
+        if (
+            outcome == ExecutionOutcome.SANDBOX_UNAVAILABLE
+            and _use_local_sandbox_fallback()
+        ):
+            return _run_locally(
+                submitted_code,
+                test_cases,
+                timeout_seconds,
+                language=language,
+            )
+        return outcome, results, error
+    except ImportError:
+        return _run_locally(
+            submitted_code,
+            test_cases,
+            timeout_seconds,
+            language=language,
+        )
+    except AttributeError:
+        if _use_local_sandbox_fallback():
+            return _run_locally(
+                submitted_code,
+                test_cases,
+                timeout_seconds,
+                language=language,
+            )
+        raise
 
 
 async def execute_submission(
@@ -207,7 +355,9 @@ def build_rubric_scores(
     passed = sum(1 for r in results if r.passed)
     total = len(results)
 
-    if passed == total:
+    if total == 0:
+        correctness_feedback = "Sandbox execution failed before tests could run."
+    elif passed == total:
         correctness_feedback = f"All {total} test cases passed."
     else:
         failed = next(r for r in results if not r.passed)

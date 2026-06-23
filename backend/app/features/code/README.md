@@ -151,15 +151,49 @@ Base path: `/api/v1/code`
   sandbox best-effort.
 - Missing API keys return `sandbox_unavailable`.
 
-Requires `E2B_API_KEY` for live execution.
+Requires `E2B_API_KEY` for cloud sandboxes. When unset (or on SDK import failure in
+development), the backend falls back to a local Python/Node subprocess runner.
+
+## Performance (LLM + submit latency)
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `CODE_ASYNC_GRADING` | `true` | `POST /adaptive-submit` returns after sandbox + heuristic grade (~2s); full LLM rubric runs in background |
+| `LITELLM_MODEL` | — | Use `openai/FW-Kimi-K2.6` for Sprint.ai proxy; Kimi skips structured output |
+| Generation token cap | 4096 | Kimi reasoning models need headroom before JSON answer block |
+
+Typical learner-facing timings (local dev, Kimi):
+
+- `POST /submissions` (Run Code): ~1–2s
+- `POST /adaptive-submit` (Submit): ~1–3s with async grading
+- `POST /generate-challenge` (next question): ~20–45s (LLM-bound)
+
+Set `CODE_ASYNC_GRADING=false` to block submit on full LLM grading (legacy).
 
 ## Frontend Behavior
 
-`Run tests` is a practice-only sandbox path and can show visible test feedback.
-`Submit answer` is official: the UI only acknowledges that the answer was saved
-and prepares the next question. It does not show LLM rubric feedback, memory
-summary, cumulative dimension scores, or official grading details during the
-session.
+UI follows the Stitch mockup
+`ExtraDocs/stitch_masaar_voice_assessment_ui/coding_challenge_masaar` (two-column
+layout, progress header, dark editor, console panel).
+
+| Surface | Path / import |
+|---------|----------------|
+| Standalone demo | `/code` |
+| Embeddable component | `import { CodeChallengeView } from "@/features/code"` |
+
+Integration props for the examiner / assessment shell:
+
+- `sessionId`, `assessmentId` — platform UUIDs from `assessment_sessions`
+- `mode="embedded"` — hides standalone-only chrome
+- `autoStart` — skip language picker when the examiner invokes the tool
+- `questionNumber`, `totalQuestions`, `timeLimitSeconds` — header progress/timer
+- `onExit`, `onSessionComplete`, `onSubmitted` — shell callbacks
+
+`Run Code` is practice-only sandbox output in the console. `Submit Solution` is
+official: silent acknowledgement and next-challenge preparation — no rubric,
+memory summary, or dimension scores during the session.
+
+See [`frontend/src/features/code/README.md`](../../../../frontend/src/features/code/README.md).
 
 ## Development
 
@@ -173,6 +207,7 @@ docker compose exec backend alembic -c migrations/alembic.ini upgrade head
 ```bash
 docker compose exec backend pytest tests/features/test_code.py tests/features/test_code_adaptive_loop.py -v
 docker compose exec backend pytest tests/features/test_code_generation.py tests/features/test_code_languages.py -v
+docker compose exec backend pytest tests/proctoring/ -v
 ```
 
 Unit tests mock E2B and cover sandbox timeouts, cold-start timeouts, BaseTool

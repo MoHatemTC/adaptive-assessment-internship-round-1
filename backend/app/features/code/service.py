@@ -12,6 +12,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.features.code import (
     adaptation,
     analysis,
+    background_grading,
     evaluation_memory,
     generation,
     grading,
@@ -247,6 +248,11 @@ async def generate_challenge(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
     challenge = await create_challenge(
         db,
@@ -404,6 +410,35 @@ async def submit_code(db: AsyncSession, payload: SubmissionCreate) -> Submission
     )
 
 
+async def run_adaptive_loop_fast(
+    db: AsyncSession,
+    submission_id: int,
+    session_id: str,
+    assessment_id: str,
+    question_index: int,
+    difficulty: str,
+) -> tuple[AdaptiveContract, LlmRubricSummary, int]:
+    """Run layers 1–4 using a sandbox-heuristic grade (no LLM wait).
+
+    Returns:
+        Contract, rubric summary, and the persisted ``grade_results`` id for
+        deferred LLM upgrade.
+    """
+    grade = await grading.grade_submission_sandbox_only(
+        db,
+        submission_id,
+        session_id,
+        question_index,
+    )
+    rubric = RubricScores.model_validate_json(grade.rubric_scores)
+    await evaluation_memory.extract_memory_card(
+        db, session_id, question_index, grade.id, difficulty
+    )
+    await analysis.analyse_session(db, session_id, question_index)
+    contract = await adaptation.compute_adaptive_contract(db, session_id, assessment_id)
+    return contract, _llm_rubric_summary(rubric), grade.id or 0
+
+
 async def run_adaptive_loop(
     db: AsyncSession,
     submission_id: int,
@@ -490,6 +525,39 @@ async def adaptive_submit(
             submitted_code=payload.submitted_code,
         ),
     )
+
+    if background_grading.async_grading_enabled():
+        try:
+            contract, _llm_rubric, grade_id = await run_adaptive_loop_fast(
+                db,
+                submission_id=submission.id,
+                session_id=payload.session_id,
+                assessment_id=payload.assessment_id,
+                question_index=payload.question_index,
+                difficulty=payload.difficulty,
+            )
+        except grading.LLMGradingUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+
+        await db.commit()
+        background_grading.schedule_llm_grade_upgrade(
+            grade_id=grade_id,
+            session_id=payload.session_id,
+            question_index=payload.question_index,
+            difficulty=payload.difficulty,
+        )
+
+        return AdaptiveSubmitResponse(
+            submission_id=submission.id,
+            passed=None,
+            score=None,
+            llm_rubric=None,
+            contract=_learner_safe_contract(contract),
+            next_challenge=None,
+        )
 
     try:
         contract, _llm_rubric = await run_adaptive_loop(
