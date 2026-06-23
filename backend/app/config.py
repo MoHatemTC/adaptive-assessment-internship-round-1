@@ -46,6 +46,8 @@ class Settings(BaseSettings):
             string means use the provider's default endpoint.
         LITELLM_MODEL: Default model identifier used when a caller does not
             specify one explicitly.
+        LITELLM_VISION_MODEL: Optional vision/VLM model for diagram grading.
+            When empty, ``LITELLM_MODEL`` is used (e.g. Kimi K2.6 multimodal).
         DEEPGRAM_API_KEY: API key for the Deepgram speech-to-text service.
         QDRANT_URL: Base URL of the Qdrant vector database.
         QDRANT_API_KEY: API key for Qdrant (may be empty for local instances).
@@ -71,6 +73,7 @@ class Settings(BaseSettings):
     LITELLM_API_KEY: SecretStr
     LITELLM_BASE_URL: str = ""
     LITELLM_MODEL: str = "gpt-4o"
+    LITELLM_VISION_MODEL: str = ""
 
     # ── Speech-to-text ────────────────────────────────────────────────────────
     DEEPGRAM_API_KEY: SecretStr

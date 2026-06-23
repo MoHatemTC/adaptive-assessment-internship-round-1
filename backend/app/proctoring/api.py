@@ -11,10 +11,17 @@ from app.core.deps import RateLimitedRoute, get_db
 from app.proctoring import service
 from app.proctoring.identity import FaceMatchProvider, get_face_match_provider
 from app.shared.schemas.proctoring import (
+    AudioAnalyzeRequest,
+    AudioAnalyzeResponse,
+    CameraAnalyzeRequest,
+    CameraAnalyzeResponse,
     IdentityVerifyRequest,
     IdentityVerifyResponse,
+    ProctoringEventBatchCreate,
+    ProctoringEventBatchResponse,
     ProctoringEventCreate,
     ProctoringEventRead,
+    ProctoringPolicyResponse,
     SessionIntegritySummary,
 )
 
@@ -43,6 +50,29 @@ async def record_proctoring_event(
 ) -> ProctoringEventRead:
     """Record an integrity event from the frontend monitor."""
     return await service.record_event(db, payload)
+
+
+@router.post("/events/batch", response_model=ProctoringEventBatchResponse, status_code=201)
+async def record_proctoring_events_batch(
+    request: Request,
+    payload: ProctoringEventBatchCreate,
+    db: AsyncSession = Depends(get_db),
+) -> ProctoringEventBatchResponse:
+    """Record multiple integrity events in one request."""
+    return await service.record_events_batch(db, payload)
+
+
+@router.get(
+    "/sessions/{session_id}/policy",
+    response_model=ProctoringPolicyResponse,
+)
+async def get_session_proctoring_policy(
+    request: Request,
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> ProctoringPolicyResponse:
+    """Return enabled checks and severity defaults for the integrity monitor."""
+    return await service.get_session_policy(db, session_id)
 
 
 @router.get(
@@ -89,3 +119,41 @@ async def verify_session_identity(
             detail="session_id in body must match path",
         )
     return await service.verify_identity(db, body, face_provider)
+
+
+@router.post(
+    "/sessions/{session_id}/analyze-camera",
+    response_model=CameraAnalyzeResponse,
+)
+async def analyze_session_camera(
+    request: Request,
+    session_id: str,
+    body: CameraAnalyzeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> CameraAnalyzeResponse:
+    """Analyze a live webcam frame with the vision model and record violations."""
+    if body.session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="session_id in body must match path",
+        )
+    return await service.analyze_camera(db, body)
+
+
+@router.post(
+    "/sessions/{session_id}/analyze-audio",
+    response_model=AudioAnalyzeResponse,
+)
+async def analyze_session_audio(
+    request: Request,
+    session_id: str,
+    body: AudioAnalyzeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AudioAnalyzeResponse:
+    """Evaluate microphone signal metrics and record audio violations."""
+    if body.session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="session_id in body must match path",
+        )
+    return await service.analyze_audio(db, body)

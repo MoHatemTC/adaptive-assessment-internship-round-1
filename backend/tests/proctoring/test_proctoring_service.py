@@ -134,8 +134,7 @@ async def test_record_event_persists_and_flags_at_threshold():
                 db,
                 ProctoringEventCreate(
                     session_id=session_id,
-                    event_type="tab_switch",
-                    severity="high",
+                    event_type="paste",
                 ),
             )
             await db.commit()
@@ -149,8 +148,7 @@ async def test_record_event_persists_and_flags_at_threshold():
                 db,
                 ProctoringEventCreate(
                     session_id=session_id,
-                    event_type="copy_paste",
-                    severity="high",
+                    event_type="screenshot",
                 ),
             )
             await db.commit()
@@ -274,7 +272,7 @@ async def test_get_session_integrity_summary():
             summary = await service.get_session_integrity(db, session_id)
             assert summary.session_id == session_id
             assert summary.verification_status == "pending"
-            assert summary.high_severity_count == 0
+            assert summary.high_severity_count == 1
             assert summary.threshold == 5
             assert len(summary.events) == 1
     finally:

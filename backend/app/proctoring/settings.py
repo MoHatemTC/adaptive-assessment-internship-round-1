@@ -6,14 +6,15 @@ from typing import Literal
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-FaceProviderName = Literal["azure", "huggingface", "auto"]
+FaceProviderName = Literal["azure", "huggingface", "vlm", "auto"]
 
 
 class ProctoringSettings(BaseSettings):
     """Face API and dev fallback settings for the proctoring feature.
 
     Attributes:
-        FACE_PROVIDER: ``azure``, ``huggingface``, or ``auto`` (pick HF, then Azure).
+        FACE_PROVIDER: ``azure``, ``huggingface``, ``vlm`` (Kimi/LiteLLM vision), or
+            ``auto`` (prefer VLM when LiteLLM is configured, then HF, then Azure).
         FACE_API_ENDPOINT: Azure Face API base URL.
         FACE_API_KEY: Azure subscription key.
         HF_TOKEN: Hugging Face token for gated model downloads (optional for public models).
@@ -51,6 +52,14 @@ class ProctoringSettings(BaseSettings):
         return bool(self.HF_FACE_MODEL_REPO.strip()) and bool(
             self.HF_FACE_MODEL_FILE.strip()
         )
+
+    @property
+    def vlm_configured(self) -> bool:
+        """Whether LiteLLM vision (Kimi VLM) can run for camera proctoring."""
+        from app.config import get_settings
+
+        settings = get_settings()
+        return bool(settings.LITELLM_API_KEY.get_secret_value().strip())
 
 
 @lru_cache

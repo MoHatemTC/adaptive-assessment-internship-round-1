@@ -36,7 +36,7 @@ def test_preprocess_face_image_shape():
     assert batch.shape == (1, 112, 112, 3)
 
 
-def test_get_face_match_provider_prefers_huggingface_in_auto_mode(monkeypatch):
+def test_get_face_match_provider_prefers_vlm_in_auto_mode(monkeypatch):
     settings = ProctoringSettings(
         FACE_PROVIDER="auto",
         HF_FACE_MODEL_REPO="onnx-community/arcface-onnx",
@@ -45,6 +45,29 @@ def test_get_face_match_provider_prefers_huggingface_in_auto_mode(monkeypatch):
     monkeypatch.setattr(
         "app.proctoring.identity.get_proctoring_settings",
         lambda: settings,
+    )
+    monkeypatch.setattr(
+        "app.proctoring.settings.ProctoringSettings.vlm_configured",
+        property(lambda self: True),
+    )
+
+    provider = get_face_match_provider()
+    assert provider.__class__.__name__ == "VLMFaceMatchProvider"
+
+
+def test_get_face_match_provider_falls_back_to_huggingface(monkeypatch):
+    settings = ProctoringSettings(
+        FACE_PROVIDER="auto",
+        HF_FACE_MODEL_REPO="onnx-community/arcface-onnx",
+        HF_FACE_MODEL_FILE="arcface.onnx",
+    )
+    monkeypatch.setattr(
+        "app.proctoring.identity.get_proctoring_settings",
+        lambda: settings,
+    )
+    monkeypatch.setattr(
+        "app.proctoring.settings.ProctoringSettings.vlm_configured",
+        property(lambda self: False),
     )
 
     provider = get_face_match_provider()

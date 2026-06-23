@@ -17,6 +17,35 @@ from app.proctoring.identity import FaceMatchResult
 from app.sessions.models import AssessmentSession
 
 
+async def _seed_assessment_session(
+    *,
+    session_id: str,
+    assessment_id: str,
+    consent: bool = True,
+    tool_config: dict[str, object] | None = None,
+) -> None:
+    async with async_session() as db:
+        db.add(
+            Assessment(
+                id=assessment_id,
+                title="API Test",
+                prompt="x",
+                blueprint_json="{}",
+                tool_config=json.dumps(tool_config or {}),
+                status="active",
+            )
+        )
+        db.add(
+            AssessmentSession(
+                id=session_id,
+                assessment_id=assessment_id,
+                learner_profile_json=json.dumps({"consent_given": consent}),
+                status="active",
+            )
+        )
+        await db.commit()
+
+
 @pytest.fixture
 async def proctoring_client(client):
     """HTTP client with real DB session for proctoring routes."""
@@ -52,28 +81,11 @@ async def test_record_event_via_api(proctoring_client):
     assessment_id = str(uuid.uuid4())
 
     try:
-        async with async_session() as db:
-            db.add(
-                Assessment(
-                    id=assessment_id,
-                    title="API Test",
-                    prompt="x",
-                    blueprint_json="{}",
-                    tool_config=json.dumps(
-                        {"proctoring": {"high_severity_threshold": 3}}
-                    ),
-                    status="active",
-                )
-            )
-            db.add(
-                AssessmentSession(
-                    id=session_id,
-                    assessment_id=assessment_id,
-                    learner_profile_json=json.dumps({"consent_given": True}),
-                    status="active",
-                )
-            )
-            await db.commit()
+        await _seed_assessment_session(
+            session_id=session_id,
+            assessment_id=assessment_id,
+            tool_config={"proctoring": {"high_severity_threshold": 3}},
+        )
 
         response = await proctoring_client.post(
             "/api/v1/proctoring/events",
@@ -143,4 +155,94 @@ async def test_verify_identity_via_api(proctoring_client):
         assert integrity.json()["identity_verified"] is True
     finally:
         fastapi_app.dependency_overrides.pop(_face_provider, None)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_get_policy_via_api(proctoring_client):
+    session_id = str(uuid.uuid4())
+    assessment_id = str(uuid.uuid4())
+    try:
+        await _seed_assessment_session(
+            session_id=session_id,
+            assessment_id=assessment_id,
+            tool_config={
+                "proctoring": {
+                    "enabled_checks": ["tab_switch", "paste", "audio_absent"],
+                    "event_cooldown_seconds": 15,
+                    "camera_poll_interval_seconds": 25,
+                }
+            },
+        )
+        response = await proctoring_client.get(
+            f"/api/v1/proctoring/sessions/{session_id}/policy"
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["session_id"] == session_id
+        assert "tab_switch" in body["enabled_checks"]
+        assert body["event_cooldown_seconds"] == 15
+        assert body["camera_poll_interval_seconds"] == 25
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_record_events_batch_via_api(proctoring_client):
+    session_id = str(uuid.uuid4())
+    assessment_id = str(uuid.uuid4())
+    try:
+        await _seed_assessment_session(
+            session_id=session_id,
+            assessment_id=assessment_id,
+            tool_config={"proctoring": {"enabled_checks": ["tab_switch", "paste"]}},
+        )
+        response = await proctoring_client.post(
+            "/api/v1/proctoring/events/batch",
+            json={
+                "session_id": session_id,
+                "events": [
+                    {"session_id": session_id, "event_type": "tab_switch"},
+                    {"session_id": session_id, "event_type": "copy"},
+                ],
+            },
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert len(body["recorded"]) == 1
+        assert body["recorded"][0]["event_type"] == "tab_switch"
+        assert any(item["reason"] == "disabled" for item in body["skipped"])
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_analyze_audio_via_api(proctoring_client):
+    session_id = str(uuid.uuid4())
+    assessment_id = str(uuid.uuid4())
+    try:
+        await _seed_assessment_session(
+            session_id=session_id,
+            assessment_id=assessment_id,
+            tool_config={
+                "proctoring": {
+                    "enabled_checks": ["audio_absent", "microphone_muted"],
+                    "require_microphone": True,
+                }
+            },
+        )
+        response = await proctoring_client.post(
+            f"/api/v1/proctoring/sessions/{session_id}/analyze-audio",
+            json={
+                "session_id": session_id,
+                "average_rms": 0.0,
+                "microphone_muted": True,
+                "microphone_enabled": True,
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["compliant"] is False
+        assert len(body["violations"]) >= 1
+    finally:
         await engine.dispose()
