@@ -137,6 +137,103 @@ async def test_run_adaptive_loop_persists_all_layers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_adaptive_submit_async_schedules_llm_upgrade(monkeypatch):
+    scheduled: list[dict] = []
+
+    def _capture_schedule(**kwargs):
+        scheduled.append(kwargs)
+
+    async def _fast_sandbox(db, payload):
+        from app.features.code.schemas import SubmissionCreate
+
+        submission = CodeSubmission(
+            challenge_id=payload.challenge_id,
+            session_id=payload.session_id,
+            submitted_code=payload.submitted_code,
+            status=SubmissionStatus.COMPLETED,
+            score=1.0,
+            passed=True,
+            grading_metadata=json.dumps({"passed_tests": 2, "total_tests": 2}),
+        )
+        db.add(submission)
+        await db.flush()
+        from app.features.code.service import _submission_to_read
+
+        return _submission_to_read(
+            submission,
+            scores=[],
+            test_results=[],
+            total_tests=2,
+            passed_tests=2,
+        )
+
+    async def _fail_llm(**kwargs):
+        raise AssertionError("adaptive submit should not block on LLM grading")
+
+    monkeypatch.setattr(
+        "app.features.code.background_grading.async_grading_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "app.features.code.background_grading.schedule_llm_grade_upgrade",
+        _capture_schedule,
+    )
+    monkeypatch.setattr(service, "submit_code", _fast_sandbox)
+    monkeypatch.setattr(grading, "_grade_with_llm", _fail_llm)
+
+    session_id = str(uuid.uuid4())
+    assessment_id = str(uuid.uuid4())
+    try:
+        async with async_session() as db:
+            db.add(
+                Assessment(
+                    id=assessment_id,
+                    title="Coding",
+                    prompt="Assess coding ability.",
+                    blueprint_json=json.dumps({"coding": {"max_questions": 5}}),
+                    tool_config=json.dumps({"coding": True}),
+                    status="active",
+                )
+            )
+            db.add(
+                AssessmentSession(
+                    id=session_id,
+                    assessment_id=assessment_id,
+                    learner_profile_json=json.dumps({"level": "junior"}),
+                    status="active",
+                )
+            )
+            challenge = CodeChallenge(
+                title="Reverse String",
+                description="Return the reverse of the input.",
+                starter_code="def solution(s): ...",
+                language="python",
+                time_limit_seconds=20,
+            )
+            db.add(challenge)
+            await db.flush()
+
+            response = await service.adaptive_submit(
+                db,
+                service.AdaptiveSubmitRequest(
+                    challenge_id=challenge.id or 0,
+                    session_id=session_id,
+                    assessment_id=assessment_id,
+                    submitted_code="def solution(s): return s[::-1]",
+                    question_index=0,
+                    difficulty="beginner",
+                ),
+            )
+
+            assert response.contract.question_index == 1
+            assert len(scheduled) == 1
+            assert scheduled[0]["session_id"] == session_id
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_adaptive_submit_is_idempotent_for_identical_retry(monkeypatch):
     session_id = str(uuid.uuid4())
     assessment_id = str(uuid.uuid4())

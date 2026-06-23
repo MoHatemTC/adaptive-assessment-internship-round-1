@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import uuid
+
 from langchain_core.exceptions import OutputParserException
 from pydantic import BaseModel, Field, ValidationError
 
+from app.config import get_settings
 from app.core.llm import get_llm_with_tracing
 from app.core.logging import get_logger
+from app.features.code.llm_json import (
+    extract_json as _extract_json,
+    extract_llm_text as _extract_llm_text,
+    prefers_raw_json_model,
+)
 from app.features.code.grading import LLMGradingUnavailable, _is_llm_unavailable
 from app.features.code.languages import (
     SupportedLanguage,
@@ -19,6 +28,10 @@ from app.features.code.languages import (
 from app.shared.schemas.memory import AdaptiveContract, DifficultyLevel, DimensionName
 
 _logger = get_logger(__name__)
+
+# Kimi emits long reasoning chains; 1536 tokens often never reaches the JSON answer.
+_GENERATION_MAX_TOKENS = 4096
+_RAW_GENERATION_ATTEMPTS = 3
 
 _FOCUS_HINTS: dict[DimensionName, str] = {
     "thinking": "algorithmic reasoning, edge cases, and problem decomposition",
@@ -72,8 +85,11 @@ def _build_generator_prompt(
     focus = contract.focus_dimension
     focus_hint = _FOCUS_HINTS.get(focus, "core programming skills") if focus else "core programming skills"
     avoid = ", ".join(previous_titles) if previous_titles else "(none yet)"
+    nonce = uuid.uuid4().hex[:10]
     return (
         f"Assessment: {assessment_id}\n"
+        f"Session: {contract.session_id}\n"
+        f"Unique nonce: {nonce} — invent a fresh problem unrelated to prior sessions.\n"
         f"Language: {language}\n"
         f"Question index: {contract.question_index}\n"
         f"Difficulty: {contract.difficulty} — {_DIFFICULTY_HINTS[contract.difficulty]}\n"
@@ -82,6 +98,65 @@ def _build_generator_prompt(
         f"Avoid repeating these titles: {avoid}\n\n"
         "Write the next challenge now."
     )
+
+
+def _prefers_raw_json_generation(model: str) -> bool:
+    return prefers_raw_json_model(model)
+
+
+async def _generate_challenge_spec_raw(
+    *,
+    llm,
+    callbacks,
+    messages: list[tuple[str, str]],
+    contract: AdaptiveContract,
+    lang: str,
+) -> GeneratedChallengeSpec:
+    schema_hint = json.dumps(
+        GeneratedChallengeSpec.model_json_schema_for_language(lang),
+        separators=(",", ":"),
+    )
+    attempt_messages = [
+        *messages,
+        (
+            "human",
+            "Return ONLY valid JSON matching this schema. No markdown fences, "
+            "no reasoning, no prose.\n"
+            f"{schema_hint}",
+        ),
+    ]
+    bound = llm.bind(max_tokens=_GENERATION_MAX_TOKENS)
+    last_error: Exception | None = None
+
+    for attempt in range(_RAW_GENERATION_ATTEMPTS):
+        try:
+            response = await bound.ainvoke(
+                attempt_messages,
+                config={"callbacks": callbacks},
+            )
+            content = _extract_llm_text(response.content)
+            spec = GeneratedChallengeSpec.model_validate_json(_extract_json(content))
+            _logger.info(
+                "code_challenge_generated_raw",
+                session_id=contract.session_id,
+                question_index=contract.question_index,
+                title=spec.title,
+                difficulty=contract.difficulty,
+                language=lang,
+                attempt=attempt + 1,
+            )
+            return spec
+        except (ValidationError, json.JSONDecodeError) as exc:
+            last_error = exc
+            _logger.warning(
+                "code_challenge_generation_parse_failed",
+                attempt=attempt + 1,
+                language=lang,
+                error=str(exc),
+            )
+            attempt_messages.append(("human", generator_retry_prompt(lang)))
+
+    raise RuntimeError("LLM challenge generation failed after retries") from last_error
 
 
 async def generate_challenge_spec(
@@ -94,7 +169,7 @@ async def generate_challenge_spec(
     """Ask the LLM for a challenge spec matching the adaptive contract."""
     lang = normalize_language(language)
     llm, callbacks = get_llm_with_tracing()
-    structured = llm.bind(streaming=False).with_structured_output(GeneratedChallengeSpec)
+    model = get_settings().LITELLM_MODEL
     messages: list[tuple[str, str]] = [
         ("system", generator_system_prompt(lang)),
         (
@@ -108,6 +183,26 @@ async def generate_challenge_spec(
         ),
     ]
 
+    if _prefers_raw_json_generation(model):
+        try:
+            return await _generate_challenge_spec_raw(
+                llm=llm,
+                callbacks=callbacks,
+                messages=messages,
+                contract=contract,
+                lang=lang,
+            )
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            if _is_llm_unavailable(exc):
+                raise LLMGradingUnavailable(
+                    "LLM challenge generation is unavailable. Verify LITELLM_API_KEY, "
+                    "LITELLM_BASE_URL, and LITELLM_MODEL in the backend environment."
+                ) from exc
+            raise RuntimeError("LLM challenge generation failed after retries") from exc
+
+    structured = llm.with_structured_output(GeneratedChallengeSpec)
     last_error: Exception | None = None
     for attempt in range(2):
         try:
@@ -143,7 +238,25 @@ async def generate_challenge_spec(
                 ) from exc
             raise
 
-    raise RuntimeError("LLM challenge generation failed after retries") from last_error
+    try:
+        return await _generate_challenge_spec_raw(
+            llm=llm,
+            callbacks=callbacks,
+            messages=messages,
+            contract=contract,
+            lang=lang,
+        )
+    except (ValidationError, json.JSONDecodeError) as exc:
+        raise RuntimeError("LLM challenge generation failed after retries") from (
+            last_error or exc
+        )
+    except Exception as exc:
+        if _is_llm_unavailable(exc):
+            raise LLMGradingUnavailable(
+                "LLM challenge generation is unavailable. Verify LITELLM_API_KEY, "
+                "LITELLM_BASE_URL, and LITELLM_MODEL in the backend environment."
+            ) from exc
+        raise RuntimeError("LLM challenge generation failed after retries") from exc
 
 
 __all__ = ["GeneratedChallengeSpec", "generate_challenge_spec"]
