@@ -1,12 +1,14 @@
+import json
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.features.diagram.grading import (
     DiagramToolOutput,
     GradeResult,
     JudgeVerdict,
     Rubric,
+    _call_grader,
     _validate_scores,
     grade_visual_answer,
 )
@@ -56,3 +58,27 @@ async def test_grade_visual_answer_judge_fails():
 
     assert result.is_trusted is False
     assert result.judge_verdict is JudgeVerdict.FAIL
+
+
+@pytest.mark.asyncio
+async def test_call_grader_uses_kernel_gateway():
+    payload = {
+        "dimension_scores": {"thinking": 0.6},
+        "reasoning": "partial",
+        "confidence": 0.7,
+    }
+    response = MagicMock()
+    response.content = json.dumps(payload)
+    bound = MagicMock()
+    bound.ainvoke = AsyncMock(return_value=response)
+    llm = MagicMock()
+    llm.bind.return_value = bound
+
+    with patch(
+        "app.features.diagram.grading.get_llm_with_tracing",
+        return_value=(llm, []),
+    ):
+        result = await _call_grader(make_rubric(), make_answer())
+
+    assert result == payload
+    bound.ainvoke.assert_awaited_once()
