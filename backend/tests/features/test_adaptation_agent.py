@@ -1,6 +1,6 @@
 """
 test_adaptation_agent.py
-Unit tests for app/features/adaptation/agent.py — fully mocked LiteLLM, no DB/network.
+Unit tests for app/features/adaptation/agent.py — fully mocked LLM, no DB/network.
 
 Covers:
   1. happy path     — mixed-tool answers produce valid AdaptationResult
@@ -21,15 +21,22 @@ from app.features.adaptation.schemas import AnswerRecord
 SESSION_ID = uuid.uuid4()
 
 
-def _fake_litellm_response(payload: dict):
-    """Build a fake LiteLLM completion response object."""
-    msg = MagicMock()
-    msg.content = json.dumps(payload)
-    choice = MagicMock()
-    choice.message = msg
+def _mock_llm_gateway(payload: dict):
+    """Patch get_llm_with_tracing to return a bound LLM with ainvoke stub."""
     response = MagicMock()
-    response.choices = [choice]
-    return response
+    response.content = json.dumps(payload)
+
+    bound = MagicMock()
+    bound.ainvoke = AsyncMock(return_value=response)
+    bound.bind.return_value = bound
+
+    llm = MagicMock()
+    llm.bind.return_value = bound
+
+    return patch(
+        "app.features.adaptation.agent.get_llm_with_tracing",
+        return_value=(llm, []),
+    )
 
 
 VALID_PAYLOAD = {
@@ -56,10 +63,7 @@ async def test_run_adaptation_mixed_tools_returns_valid_result():
         AnswerRecord(tool="voice",   dimension="soft",        score=0.6, feedback="Clear but brief."),
     ]
 
-    with patch(
-        "app.features.adaptation.agent.litellm.acompletion",
-        new=AsyncMock(return_value=_fake_litellm_response(VALID_PAYLOAD)),
-    ):
+    with _mock_llm_gateway(VALID_PAYLOAD):
         result = await run_adaptation(SESSION_ID, answers)
 
     assert result.session_id == SESSION_ID
@@ -90,10 +94,7 @@ async def test_run_adaptation_invalid_difficulty_falls_back():
     bad_payload = {**VALID_PAYLOAD, "next_difficulty": "extreme"}  # not a valid enum value
     answers = [AnswerRecord(tool="mcq", dimension="thinking", score=0.9, feedback="Good.")]
 
-    with patch(
-        "app.features.adaptation.agent.litellm.acompletion",
-        new=AsyncMock(return_value=_fake_litellm_response(bad_payload)),
-    ):
+    with _mock_llm_gateway(bad_payload):
         result = await run_adaptation(SESSION_ID, answers)
 
     # avg of (7,5,6,8,4) = 6.0 -> falls in medium band (<=6)

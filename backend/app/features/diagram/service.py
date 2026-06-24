@@ -9,24 +9,27 @@ Two responsibilities:
 Image validation (type + size guards) lives here so both the API route
 and the LangChain tool share the same checks.
 
-Grading uses LiteLLM (as specified in the NFR resilience section) with
-the image attached as a vision content block — NOT described as text.
-Langfuse tracing is wired at call sites per the observability requirement.
+Grading routes through :func:`app.core.llm.get_llm_with_tracing` with the image
+attached as a vision content block — NOT described as text.
+Langfuse tracing and retry policy are provided by the kernel LLM gateway.
 """
 
 import uuid
 import base64
 import mimetypes
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
-import litellm
+from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.config import get_settings
+from app.core.llm import get_llm_with_tracing
+from app.core.llm_json import parse_llm_json, prefers_raw_json_model, resolve_vision_model
 from app.core.logging import get_logger
+from app.core.metrics import record_llm_call
 from app.features.diagram.models import DiagramQuestion, DiagramAnswer, SkillDimension
 
 _logger = get_logger(__name__)
@@ -150,7 +153,6 @@ class DiagramService:
             raise
 
 
-        settings = get_settings()
         messages = _build_vision_message(
             prompt=answer_text,
             rubric=question.rubric,
@@ -158,19 +160,23 @@ class DiagramService:
             mime_type=mime_type,
         )
 
-        # TODO: add Langfuse callback here per observability requirement
-        response = await litellm.acompletion(
-            model=settings.LITELLM_MODEL,
-            messages=messages,
-            max_tokens=512,
-            response_format={"type": "json_object"},
-            api_key=settings.LITELLM_API_KEY.get_secret_value(),
-            api_base=settings.LITELLM_BASE_URL or None,
-        )
+        vision_model = resolve_vision_model()
+        llm, callbacks = get_llm_with_tracing(vision_model)
+        bound = llm.bind(max_tokens=512)
+        if not prefers_raw_json_model(vision_model):
+            bound = bound.bind(response_format={"type": "json_object"})
 
-        import json
-        raw = response.choices[0].message.content or "{}"
-        grading = json.loads(raw)
+        start = time.perf_counter()
+        try:
+            response = await bound.ainvoke(
+                [HumanMessage(content=messages[0]["content"])],
+                config={"callbacks": callbacks},
+            )
+            grading = parse_llm_json(response.content)
+            record_llm_call(vision_model, "diagram", "success", time.perf_counter() - start)
+        except Exception:
+            record_llm_call(vision_model, "diagram", "error", time.perf_counter() - start)
+            raise
 
         answer.score            = float(grading.get("score", 0.0))
         answer.grading_feedback = grading.get("feedback", "")

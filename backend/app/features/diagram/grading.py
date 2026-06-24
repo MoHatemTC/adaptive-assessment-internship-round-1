@@ -16,15 +16,22 @@ Produces:  GradeResult (consumed by evaluation_memory.py)
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from litellm import acompletion  # routed through the LiteLLM gateway
+from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.config import get_settings
+from app.core.llm import get_llm_with_tracing
+from app.core.llm_json import parse_llm_json, prefers_raw_json_model
+from app.core.metrics import record_llm_call
 
 DIMENSIONS = ["thinking", "soft", "work", "digital_ai", "growth"]
+
+_GRADING_MAX_TOKENS = 512
 
 
 class JudgeVerdict(str, Enum):
@@ -82,41 +89,66 @@ learner's answer, and a grader's proposed scores + reasoning. Check for:
 Respond ONLY with JSON: {"verdict": "pass" or "fail", "notes": "<1-2 sentences>"}"""
 
 
+async def _invoke_grading_llm(
+    *,
+    system_prompt: str,
+    user_payload: dict[str, Any],
+    tool_name: str,
+) -> dict[str, Any]:
+    """Run a JSON-shaped grading LLM call through the kernel gateway."""
+    settings = get_settings()
+    model = settings.LITELLM_MODEL
+    llm, callbacks = get_llm_with_tracing(model)
+    bound = llm.bind(max_tokens=_GRADING_MAX_TOKENS)
+    if not prefers_raw_json_model(model):
+        bound = bound.bind(response_format={"type": "json_object"})
+
+    start = time.perf_counter()
+    try:
+        response = await bound.ainvoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=json.dumps(user_payload)),
+            ],
+            config={"callbacks": callbacks},
+        )
+        record_llm_call(model, tool_name, "success", time.perf_counter() - start)
+    except Exception:
+        record_llm_call(model, tool_name, "error", time.perf_counter() - start)
+        raise
+
+    return parse_llm_json(response.content)
+
+
 async def _call_grader(rubric: Rubric, answer: DiagramToolOutput) -> dict[str, Any]:
     user_payload = {
         "rubric_criteria": rubric.criteria_text,
         "scored_dimensions": list(rubric.dimension_weights.keys()),
         "learner_answer": answer.raw_answer_text,
     }
-    resp = await acompletion(
-        model="diagram-grader",          # LiteLLM gateway alias, Phase 0.3
-        messages=[
-            {"role": "system", "content": GRADER_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(user_payload)},
-        ],
-        timeout=10,
-        num_retries=2,
+    return await _invoke_grading_llm(
+        system_prompt=GRADER_SYSTEM_PROMPT,
+        user_payload=user_payload,
+        tool_name="diagram_grader",
     )
-    return json.loads(resp.choices[0].message.content)
 
 
-async def _call_judge(rubric: Rubric, answer: DiagramToolOutput, grader_out: dict[str, Any]) -> dict[str, Any]:
+async def _call_judge(
+    rubric: Rubric,
+    answer: DiagramToolOutput,
+    grader_out: dict[str, Any],
+) -> dict[str, Any]:
     user_payload = {
         "rubric_criteria": rubric.criteria_text,
         "learner_answer": answer.raw_answer_text,
         "grader_scores": grader_out["dimension_scores"],
         "grader_reasoning": grader_out["reasoning"],
     }
-    resp = await acompletion(
-        model="diagram-judge",
-        messages=[
-            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(user_payload)},
-        ],
-        timeout=10,
-        num_retries=2,
+    return await _invoke_grading_llm(
+        system_prompt=JUDGE_SYSTEM_PROMPT,
+        user_payload=user_payload,
+        tool_name="diagram_judge",
     )
-    return json.loads(resp.choices[0].message.content)
 
 
 def _validate_scores(scores: dict[str, float], rubric: Rubric) -> dict[str, float]:
