@@ -72,3 +72,6 @@ graphify-out/
 
 # ── uv (for local tests) ──────────────────────────────────────────────
 uv.lock
+
+AGENT.md
+.agents/

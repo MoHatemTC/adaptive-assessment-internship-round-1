@@ -8,17 +8,10 @@ import type {
   SessionIntegritySummary,
 } from "@/features/proctoring/types";
 
-const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
-  ""
-).replace(/\/$/, "");
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
 function apiUrl(path: string): string {
-  if (API_BASE_URL) return `${API_BASE_URL}${path}`;
-  if (typeof window !== "undefined") return path;
-  const origin = process.env.BACKEND_URL ?? "http://localhost:8000";
-  return `${origin.replace(/\/$/, "")}${path}`;
+  return `${API_BASE_URL}${path}`;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

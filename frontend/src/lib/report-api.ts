@@ -1,14 +1,7 @@
-const API_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
-  ""
-).replace(/\/$/, "");
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
 function apiUrl(path: string): string {
-  if (API_BASE) return `${API_BASE}${path}`;
-  if (typeof window !== "undefined") return path;
-  const origin = process.env.BACKEND_URL ?? "http://localhost:8000";
-  return `${origin.replace(/\/$/, "")}${path}`;
+  return `${API_BASE}${path}`;
 }
 
 export type DimensionName =
