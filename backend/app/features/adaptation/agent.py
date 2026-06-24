@@ -5,14 +5,18 @@ each feature's repository function) — never imports a feature model.
 """
 
 import json
+import time
 import uuid
 
-import litellm
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import get_settings
+from app.core.llm import get_llm_with_tracing
+from app.core.llm_json import extract_json, extract_llm_text, prefers_raw_json_model
 from app.core.logging import get_logger
+from app.core.metrics import record_llm_call
 from app.features.adaptation.prompts import SYSTEM_PROMPT, build_user_message
-from app.features.adaptation.schemas import AnswerRecord, AdaptationResult, DimensionScore
+from app.features.adaptation.schemas import AdaptationResult, AnswerRecord, DimensionScore
 
 _logger = get_logger(__name__)
 
@@ -41,20 +45,28 @@ async def run_adaptation(
     user_message = build_user_message(answer_dicts)
 
     settings = get_settings()
-    response = await litellm.acompletion(
-        model=settings.LITELLM_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": user_message},
-        ],
-        max_tokens=512,
-        response_format={"type": "json_object"},
-        api_key=settings.LITELLM_API_KEY.get_secret_value(),
-        api_base=settings.LITELLM_BASE_URL or None,
-    )
+    model = settings.LITELLM_MODEL
+    llm, callbacks = get_llm_with_tracing(model)
+    bound = llm.bind(max_tokens=512)
+    if not prefers_raw_json_model(model):
+        bound = bound.bind(response_format={"type": "json_object"})
 
-    raw = response.choices[0].message.content or "{}"
-    parsed = json.loads(raw)
+    start = time.perf_counter()
+    try:
+        response = await bound.ainvoke(
+            [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=user_message),
+            ],
+            config={"callbacks": callbacks},
+        )
+        record_llm_call(model, "adaptation", "success", time.perf_counter() - start)
+    except Exception:
+        record_llm_call(model, "adaptation", "error", time.perf_counter() - start)
+        raise
+
+    raw = extract_llm_text(response.content)
+    parsed = json.loads(extract_json(raw))
 
     dim_scores = {
         k: DimensionScore(**v)
