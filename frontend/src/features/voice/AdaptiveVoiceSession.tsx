@@ -10,11 +10,7 @@ import {
   startAdaptiveVoiceSession,
 } from "@/lib/voice-api";
 
-const API_BASE =
-  (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(
-    /\/$/,
-    "",
-  );
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
 /** Derive a WebSocket base URL from the HTTP API base. */
 function getWsBase(): string {
