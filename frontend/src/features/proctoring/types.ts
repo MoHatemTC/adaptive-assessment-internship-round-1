@@ -77,6 +77,20 @@ export interface SessionIntegritySummary {
   events: ProctoringEventRead[];
 }
 
+export interface SessionIntegritySnapshot {
+  verification_status: VerificationStatus;
+  high_severity_count: number;
+  threshold: number;
+  identity_verified: boolean;
+}
+
+export interface IdentityVerifyResponse {
+  verified: boolean;
+  match_score: number | null;
+  verification_status: VerificationStatus;
+  message?: string;
+}
+
 export interface CameraAnalyzeResponse {
   compliant: boolean;
   face_visible: boolean;

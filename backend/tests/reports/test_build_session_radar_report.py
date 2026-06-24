@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from app.admin.models import Assessment
 from app.core.database import async_session
+from app.core.security import generate_session_token, hash_token
 from app.reports.service import build_session_radar_report
-from app.sessions.models import MemoryCard, SkillDimensionScore
+from app.sessions.models import AssessmentSession, MemoryCard, SkillDimensionScore
 
 
 @pytest.mark.asyncio
@@ -27,6 +29,17 @@ async def test_build_session_radar_report_aggregates_scores_and_memory():
                 blueprint_json="{}",
                 tool_config="{}",
                 status="active",
+            )
+        )
+        db.add(
+            AssessmentSession(
+                id=session_id,
+                assessment_id=assessment_id,
+                learner_profile_json=json.dumps({"name": "Learner"}),
+                status="completed",
+                token_hash=hash_token(generate_session_token()),
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                completed_at=datetime.now(timezone.utc),
             )
         )
         db.add(
@@ -71,3 +84,6 @@ async def test_build_session_radar_report_aggregates_scores_and_memory():
     assert report.evidence_highlights == ["Explained trade-offs clearly."]
     thinking = next(point for point in report.dimensions if point.name == "thinking")
     assert thinking.score == 8
+    assert report.integrity is not None
+    assert report.integrity.verification_status == "pending"
+    assert report.integrity.identity_verified is False

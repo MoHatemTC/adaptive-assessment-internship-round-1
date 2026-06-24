@@ -29,6 +29,10 @@ export interface CodeChallengeViewProps {
   assessmentId?: string;
   /** Enable browser + camera integrity monitoring for the session. */
   enableProctoring?: boolean;
+  /** Consent was collected before the assessment (required for camera/mic). */
+  proctoringConsentGiven?: boolean;
+  /** Reference portrait from identity verification for VLM continuity checks. */
+  referenceImageB64?: string;
   onSessionComplete?: (payload: {
     reason: "learner" | "adaptive";
     questionsAnswered: number;
@@ -42,6 +46,8 @@ export function CodeChallengeView({
   initialSessionId,
   assessmentId = DEFAULT_ASSESSMENT_ID,
   enableProctoring = false,
+  proctoringConsentGiven = false,
+  referenceImageB64,
   onSessionComplete,
 }: CodeChallengeViewProps) {
   const [sessionId, setSessionId] = useState(initialSessionId ?? newSessionId);
@@ -249,6 +255,8 @@ export function CodeChallengeView({
     <IntegrityMonitor
       sessionId={sessionId}
       enabled={enableProctoring && sessionStarted && !sessionEnded}
+      consentGiven={proctoringConsentGiven}
+      referenceImageB64={referenceImageB64}
       showBadge={enableProctoring}
     >
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">

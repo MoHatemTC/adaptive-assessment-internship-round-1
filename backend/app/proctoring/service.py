@@ -41,6 +41,7 @@ from app.shared.schemas.proctoring import (
     ProctoringPolicyResponse,
     ProctoringSeverity,
     SessionIntegritySummary,
+    SessionIntegritySnapshot,
     VerificationStatus,
 )
 
@@ -460,6 +461,20 @@ async def get_session_integrity(
         threshold=policy.high_severity_threshold,
         identity_verified=_has_event_type(events, "identity_verified"),
         events=event_reads,
+    )
+
+
+async def get_integrity_snapshot(
+    db: AsyncSession,
+    session_id: str,
+) -> SessionIntegritySnapshot:
+    """Return a lightweight integrity snapshot for session/report contracts."""
+    summary = await get_session_integrity(db, session_id)
+    return SessionIntegritySnapshot(
+        verification_status=summary.verification_status,
+        high_severity_count=summary.high_severity_count,
+        threshold=summary.threshold,
+        identity_verified=summary.identity_verified,
     )
 
 

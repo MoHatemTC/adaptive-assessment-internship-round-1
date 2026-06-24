@@ -28,6 +28,12 @@ export interface SessionRadarReport {
   evidence_highlights: string[];
   summary: string;
   generated_at: string;
+  integrity?: {
+    verification_status: string;
+    high_severity_count: number;
+    threshold: number;
+    identity_verified: boolean;
+  } | null;
 }
 
 export function getSessionRadarReport(

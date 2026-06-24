@@ -1,6 +1,7 @@
 import type {
   AudioAnalyzeResponse,
   CameraAnalyzeResponse,
+  IdentityVerifyResponse,
   ProctoringEventBatchCreate,
   ProctoringEventCreate,
   ProctoringEventRead,
@@ -92,6 +93,20 @@ export function analyzeAudioSignal(payload: {
 }): Promise<AudioAnalyzeResponse> {
   return request<AudioAnalyzeResponse>(
     `/api/v1/proctoring/sessions/${payload.session_id}/analyze-audio`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function verifySessionIdentity(payload: {
+  session_id: string;
+  reference_image_b64: string;
+  live_capture_b64: string;
+}): Promise<IdentityVerifyResponse> {
+  return request(
+    `/api/v1/proctoring/sessions/${payload.session_id}/verify-identity`,
     {
       method: "POST",
       body: JSON.stringify(payload),

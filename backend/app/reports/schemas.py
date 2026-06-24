@@ -6,6 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.shared.schemas.proctoring import SessionIntegritySnapshot
 from app.shared.schemas.memory import DimensionName
 
 _DIMENSION_LABELS: dict[DimensionName, str] = {
@@ -48,6 +49,7 @@ class SessionRadarReport(BaseModel):
     evidence_highlights: list[str]
     summary: str
     generated_at: datetime
+    integrity: SessionIntegritySnapshot | None = None
 
 
 def dimension_label(name: DimensionName) -> str:

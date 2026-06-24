@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.logging import get_logger
+from app.proctoring import service as proctoring_service
 from app.reports.schemas import DimensionRadarPoint, SessionRadarReport, dimension_label
 from app.sessions.models import MemoryCard, SkillDimensionScore
 from app.shared.schemas.memory import DimensionName
@@ -145,6 +146,7 @@ async def build_session_radar_report(
             tools_used=tools_used,
         ),
         generated_at=datetime.now(timezone.utc),
+        integrity=await proctoring_service.get_integrity_snapshot(db, session_id),
     )
 
     _logger.info(

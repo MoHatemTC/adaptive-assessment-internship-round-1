@@ -11,6 +11,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.admin.models import Assessment
 from app.core.deps import RateLimitedRoute, get_db, get_session_by_token
 from app.core.security import generate_session_token, hash_token
+from app.proctoring import service as proctoring_service
 from app.sessions.models import AssessmentSession
 from app.sessions.schemas import (
     SessionRead,
@@ -35,7 +36,8 @@ def _parse_profile(raw: str) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _to_session_read(row: AssessmentSession) -> SessionRead:
+async def _to_session_read(db: AsyncSession, row: AssessmentSession) -> SessionRead:
+    integrity = await proctoring_service.get_integrity_snapshot(db, row.id)
     return SessionRead(
         id=row.id,
         assessment_id=row.assessment_id,
@@ -46,6 +48,7 @@ def _to_session_read(row: AssessmentSession) -> SessionRead:
         completed_at=row.completed_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        integrity=integrity,
     )
 
 
@@ -80,8 +83,9 @@ async def sign_in(
 async def get_my_session(
     request: Request,
     session: AssessmentSession = Depends(get_session_by_token),
+    db: AsyncSession = Depends(get_db),
 ) -> SessionRead:
-    return _to_session_read(session)
+    return await _to_session_read(db, session)
 
 
 @router.post("/{session_id}/start", response_model=SessionRead)
@@ -100,7 +104,7 @@ async def start_session(
         session.started_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(session)
-    return _to_session_read(session)
+    return await _to_session_read(db, session)
 
 
 @router.post("/{session_id}/complete", response_model=SessionRead)
@@ -113,9 +117,9 @@ async def complete_session(
     if session.id != session_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session mismatch")
     if session.status == "completed":
-        return _to_session_read(session)
+        return await _to_session_read(db, session)
     session.status = "completed"
     session.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(session)
-    return _to_session_read(session)
+    return await _to_session_read(db, session)

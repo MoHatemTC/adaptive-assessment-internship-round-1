@@ -23,6 +23,8 @@ const DEVTOOLS_THRESHOLD = 160;
 export interface UseProctoringOptions {
   sessionId: string;
   enabled?: boolean;
+  /** Must be true before camera/microphone capture (consent gate). */
+  consentGiven?: boolean;
   referenceImageB64?: string;
   onViolation?: (eventType: ProctoringEventType) => void;
   onFlagged?: () => void;
@@ -50,6 +52,7 @@ function captureVideoFrame(video: HTMLVideoElement): string | null {
 export function useProctoring({
   sessionId,
   enabled = true,
+  consentGiven = false,
   referenceImageB64,
   onViolation,
   onFlagged,
@@ -244,7 +247,7 @@ export function useProctoring({
   }, [enabled, policy, refreshIntegrity, reportEvent]);
 
   useEffect(() => {
-    if (!enabled || !policy?.require_camera) return;
+    if (!enabled || !policy?.require_camera || !consentGiven) return;
 
     let cancelled = false;
     let cameraTimer: number | undefined;
@@ -315,6 +318,7 @@ export function useProctoring({
       videoRef.current = null;
     };
   }, [
+    consentGiven,
     enabled,
     onViolation,
     policy,
@@ -325,7 +329,7 @@ export function useProctoring({
   ]);
 
   useEffect(() => {
-    if (!enabled || !policy?.require_microphone) return;
+    if (!enabled || !policy?.require_microphone || !consentGiven) return;
 
     let cancelled = false;
     let audioTimer: number | undefined;
@@ -401,7 +405,7 @@ export function useProctoring({
       audioContextRef.current = null;
       analyserRef.current = null;
     };
-  }, [enabled, policy, reportEvent, sessionId]);
+  }, [consentGiven, enabled, policy, reportEvent, sessionId]);
 
   return { policy, state, reportEvent, refreshIntegrity };
 }
