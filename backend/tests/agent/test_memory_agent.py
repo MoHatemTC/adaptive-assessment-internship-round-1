@@ -343,7 +343,80 @@ def test_build_memory_graph_has_expected_nodes():
     graph = build_memory_graph()
     node_names = set(graph.nodes.keys())
     expected_nodes = {
-        "load_prior_cards", "extract_card", "save_card", "summarize_memory"
+        "load_prior_cards", "extract_card", "save_card",
+        "embed_and_store", "summarize_memory",
     }
     for expected in expected_nodes:
         assert expected in node_names
+
+
+# ---------------------------------------------------------------------------
+# Kimi K2 list-content parsing (Fix 1)
+# ---------------------------------------------------------------------------
+
+def test_memory_agent_handles_kimi_k2_list_response():
+    """Verify the memory agent parses Kimi K2's list response format.
+
+    Kimi K2 returns a list of thinking blocks followed by the final answer
+    string. The helper must extract that final string without crashing on a
+    ``.strip()`` of a list.
+    """
+    from app.agent.memory_agent import _extract_answer_from_response
+
+    kimi_list_response = [
+        {"type": "thinking", "thinking": "Let me analyze this learner response..."},
+        {"type": "thinking", "thinking": "They seem to understand the concept..."},
+        '{"evidence_summary": "Learner showed clear reasoning", '
+        '"dimension_signals": {"thinking": true}}',
+    ]
+    mock_response = MagicMock()
+    mock_response.content = kimi_list_response
+
+    answer = _extract_answer_from_response(mock_response)
+
+    assert answer != ""
+    assert "evidence_summary" in answer
+    assert "clear reasoning" in answer
+
+
+# ---------------------------------------------------------------------------
+# Qdrant wiring is non-critical (Fix 2)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_embed_and_store_node_skips_on_qdrant_failure():
+    """If Qdrant is unreachable, the node logs a warning and does NOT set
+    ``state['error']`` — the graph must continue to summarize_memory.
+    """
+    from app.agent.memory_agent import embed_and_store_node
+
+    mock_card = MemoryCardRead(
+        id=1,
+        session_id="test-session-id-1234567890123",
+        tool_type="voice",
+        question_index=0,
+        difficulty="beginner",
+        evidence_summary="Learner demonstrated clear understanding",
+        dimension_signals=DimensionSignals(),
+        passed=True,
+        created_at=_NOW,
+    )
+
+    state = {
+        "session_id": "test-session-id-1234567890123",
+        "saved_card": mock_card,
+        "error": None,
+    }
+
+    # Mock the embedder so the test does not load the SentenceTransformer model,
+    # and force the Qdrant upsert to fail to prove the failure is swallowed.
+    with patch(
+        "app.shared.embedder.embed_text", return_value=[0.0] * 384
+    ), patch("app.shared.qdrant.get_qdrant_client") as mock_client:
+        mock_client.return_value.upsert = AsyncMock(
+            side_effect=Exception("Qdrant unreachable")
+        )
+        result = await embed_and_store_node(state)
+
+    # Must not set error — Qdrant is non-critical.
+    assert result.get("error") is None

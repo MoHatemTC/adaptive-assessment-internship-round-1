@@ -41,6 +41,31 @@ from app.shared.schemas.memory import (
 logger = get_logger(__name__)
 
 
+def _extract_answer_from_response(response: Any) -> str:
+    """Extract the final answer string from an LLM response.
+
+    Kimi K2 returns a list of thinking blocks + final answer string.
+    Use reversed() to find the last plain string (the actual answer).
+
+    Args:
+        response: The LangChain message returned by ``llm.ainvoke``.
+
+    Returns:
+        The final answer text, stripped. Empty string if none is found.
+    """
+    raw_content = response.content
+    if isinstance(raw_content, list):
+        for item in reversed(raw_content):
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text", "").strip()
+                if text:
+                    return text
+        return ""
+    return str(raw_content).strip()
+
+
 class MemoryAgentState(TypedDict):
     """LangGraph state for the memory agent pipeline.
 
@@ -59,6 +84,7 @@ class MemoryAgentState(TypedDict):
     prior_cards: Annotated[list[dict], operator.add]
     card_create: Optional[dict]
     new_card: Optional[dict]
+    saved_card: Optional[MemoryCardRead]
     memory_summary: str
     error: Optional[str]
 
@@ -176,7 +202,9 @@ async def extract_card_node(state: MemoryAgentState) -> dict[str, Any]:
             config={"callbacks": callbacks},
         )
 
-        content = response.content.strip()
+        # Kimi K2 returns a list of thinking blocks + final answer string.
+        # Use reversed() to find the last plain string (the actual answer).
+        content = _extract_answer_from_response(response)
         if content.startswith("```json"):
             content = content[7:]
         if content.startswith("```"):
@@ -237,7 +265,7 @@ async def save_card_node(state: MemoryAgentState) -> dict[str, Any]:
             await db.commit()
             await db.refresh(db_card)
 
-        serialized_card = MemoryCardRead.model_validate(
+        read_card = MemoryCardRead.model_validate(
             {
                 "id": db_card.id,
                 "session_id": card_create.session_id,
@@ -249,13 +277,92 @@ async def save_card_node(state: MemoryAgentState) -> dict[str, Any]:
                 "passed": card_create.passed,
                 "created_at": db_card.created_at,
             }
-        ).model_dump(mode="json")
+        )
 
-        return {"new_card": serialized_card}
+        # ``new_card`` stays a JSON-serializable dict for the public return value;
+        # ``saved_card`` carries the typed object the embed_and_store node needs.
+        return {
+            "new_card": read_card.model_dump(mode="json"),
+            "saved_card": read_card,
+        }
 
     except Exception as e:
         logger.error("memory_save_failed", error=str(e))
         return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Node 3.5 — embed the saved card and store it in Qdrant (non-critical)
+# ---------------------------------------------------------------------------
+
+async def embed_and_store_node(state: MemoryAgentState) -> dict[str, Any]:
+    """Embed the saved card's evidence summary and upsert it to Qdrant.
+
+    Non-critical path: any failure — Qdrant being unreachable, the embedding
+    model failing to load, or a malformed vector — is logged and swallowed so
+    the pipeline continues to ``summarize_memory``. This node never sets
+    ``state["error"]``.
+
+    Args:
+        state: Current pipeline state.
+
+    Returns:
+        An empty dict. This node has side effects only; it must not return
+        reducer-managed fields such as ``prior_cards`` (which would duplicate
+        them via the ``operator.add`` reducer).
+    """
+    if state.get("error"):
+        return {}
+
+    card = state.get("saved_card")
+    if card is None:
+        return {}
+
+    try:
+        import uuid
+
+        from qdrant_client.models import PointStruct
+
+        from app.shared.embedder import embed_text
+        from app.shared.qdrant import (
+            COLLECTION_PLATFORM_MEMORY,
+            get_qdrant_client,
+        )
+
+        evidence = card.evidence_summary
+        if not evidence or not evidence.strip():
+            return {}
+
+        vector = embed_text(evidence)
+
+        client = get_qdrant_client()
+        point = PointStruct(
+            id=str(uuid.uuid4()),
+            vector=vector,
+            payload={
+                "session_id": card.session_id,
+                "tool_type": card.tool_type,
+                "question_index": card.question_index,
+                "difficulty": card.difficulty,
+                "passed": card.passed,
+                "evidence_summary": evidence,
+            },
+        )
+        await client.upsert(
+            collection_name=COLLECTION_PLATFORM_MEMORY,
+            points=[point],
+        )
+        logger.info(
+            "qdrant_memory_stored",
+            session_id=card.session_id,
+            tool_type=card.tool_type,
+            question_index=card.question_index,
+        )
+    except Exception as exc:  # noqa: BLE001 - Qdrant is a non-critical path
+        logger.warning("qdrant_memory_store_failed", reason=str(exc))
+        # Do NOT set state["error"] — Qdrant is non-critical.
+
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +426,9 @@ async def summarize_memory_node(state: MemoryAgentState) -> dict[str, Any]:
             ],
             config={"callbacks": callbacks},
         )
-        return {"memory_summary": response.content.strip()}
+        # Kimi K2 returns a list of thinking blocks + final answer string.
+        # Use reversed() to find the last plain string (the actual answer).
+        return {"memory_summary": _extract_answer_from_response(response)}
 
     except Exception as e:
         logger.error("memory_summarize_failed", error=str(e))
@@ -341,12 +450,14 @@ def build_memory_graph() -> CompiledStateGraph:
     graph.add_node("load_prior_cards", load_prior_cards_node)
     graph.add_node("extract_card", extract_card_node)
     graph.add_node("save_card", save_card_node)
+    graph.add_node("embed_and_store", embed_and_store_node)
     graph.add_node("summarize_memory", summarize_memory_node)
 
     graph.add_edge(START, "load_prior_cards")
     graph.add_edge("load_prior_cards", "extract_card")
     graph.add_edge("extract_card", "save_card")
-    graph.add_edge("save_card", "summarize_memory")
+    graph.add_edge("save_card", "embed_and_store")
+    graph.add_edge("embed_and_store", "summarize_memory")
     graph.add_edge("summarize_memory", END)
 
     return graph.compile()
@@ -399,6 +510,7 @@ async def run_memory_agent(
         "prior_cards": [],
         "card_create": None,
         "new_card": None,
+        "saved_card": None,
         "memory_summary": "",
         "error": None,
     }
