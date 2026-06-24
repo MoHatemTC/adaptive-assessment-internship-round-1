@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
 
+from app.admin.models import Assessment
 from app.core.database import async_session, engine
 from app.features.code import adaptation, analysis
 from app.sessions.models import MemoryCard, SkillDimensionScore
@@ -59,8 +61,21 @@ async def test_analyse_session_scores_engaged_dimensions_only():
 @pytest.mark.asyncio
 async def test_compute_adaptive_contract_from_scores():
     session_id = str(uuid.uuid4())
+    assessment_id = "assess-1"
     try:
         async with async_session() as db:
+            db.add(
+                Assessment(
+                    id=assessment_id,
+                    title="Coding",
+                    prompt="x",
+                    blueprint_json=json.dumps(
+                        {"coding": {"difficulty_thresholds": {"intermediate": 5, "advanced": 8}}}
+                    ),
+                    tool_config="{}",
+                    status="active",
+                )
+            )
             db.add(
                 SkillDimensionScore(
                     session_id=session_id,
@@ -76,7 +91,7 @@ async def test_compute_adaptive_contract_from_scores():
             await db.flush()
 
             contract = await adaptation.compute_adaptive_contract(
-                db, session_id, assessment_id="assess-1"
+                db, session_id, assessment_id=assessment_id
             )
 
             assert contract.session_id == session_id
@@ -99,8 +114,26 @@ async def test_compute_adaptive_contract_from_scores():
 @pytest.mark.asyncio
 async def test_compute_adaptive_contract_stops_after_max_questions():
     session_id = str(uuid.uuid4())
+    assessment_id = "assess-1"
     try:
         async with async_session() as db:
+            db.add(
+                Assessment(
+                    id=assessment_id,
+                    title="Coding",
+                    prompt="x",
+                    blueprint_json=json.dumps(
+                        {
+                            "coding": {
+                                "max_questions": 5,
+                                "difficulty_thresholds": {"intermediate": 5, "advanced": 8},
+                            }
+                        }
+                    ),
+                    tool_config="{}",
+                    status="active",
+                )
+            )
             for idx in range(5):
                 db.add(
                     SkillDimensionScore(
@@ -117,7 +150,7 @@ async def test_compute_adaptive_contract_stops_after_max_questions():
             await db.flush()
 
             contract = await adaptation.compute_adaptive_contract(
-                db, session_id, assessment_id="assess-1"
+                db, session_id, assessment_id=assessment_id
             )
 
             assert contract.stop is True

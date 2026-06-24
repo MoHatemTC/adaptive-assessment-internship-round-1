@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
-from analysis import DimensionVector, DimensionEstimate
-from adaptation import (
+from app.features.diagram.analysis import DimensionVector, DimensionEstimate
+from app.features.diagram.adaptation import (
     Action, BlueprintConfig, LearnerProfile, select_next_visual, _clamp,
 )
 

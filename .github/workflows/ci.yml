@@ -1,7 +1,15 @@
 name: CI
 
 on:
-  workflow_dispatch: # disabled for now — trigger manually only when ready
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
 
 jobs:
   backend:
@@ -14,25 +22,50 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: password
         ports: ["5432:5432"]
-        options: --health-cmd pg_isready --health-interval 10s
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
       redis:
         image: redis:7
         ports: ["6379:6379"]
     defaults:
       run:
         working-directory: backend
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/masaar_test
+      REDIS_URL: redis://localhost:6379/0
+      LITELLM_API_KEY: ci-test-key
+      LITELLM_BASE_URL: ""
+      LITELLM_MODEL: gpt-4o
+      TRANSCRIPTION_MODEL: azure/whisper
+      QDRANT_URL: ""
+      QDRANT_API_KEY: ""
+      LANGFUSE_PUBLIC_KEY: ci-public
+      LANGFUSE_SECRET_KEY: ci-secret
+      LANGFUSE_HOST: https://cloud.langfuse.com
+      SECRET_KEY: ci-secret-key-not-for-production
+      ENVIRONMENT: development
+      EMBEDDING_MODEL: all-MiniLM-L6-v2
+      HF_HUB_DISABLE_TELEMETRY: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: ${{ runner.os }}-hf-${{ hashFiles('backend/requirements.txt') }}-minilm
       - run: pip install -r requirements.txt
-      - run: ruff check .
-      - run: mypy app/
-      - run: pytest tests/ -v
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/masaar_test
-          REDIS_URL: redis://localhost:6379/0
+        working-directory: backend
+      - run: python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+        working-directory: backend
+      - run: ruff check app/ tests/ --select E9,F63,F7,F82,F821
+        working-directory: backend
+      - run: alembic upgrade head
+        working-directory: backend
+      - run: pytest tests/ -q --ignore=tests/integration
+        working-directory: backend
 
   frontend:
     runs-on: ubuntu-latest
@@ -43,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci

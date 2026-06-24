@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from analysis import DimensionVector
+from app.features.diagram.analysis import DimensionVector
 
 
 class Action(str, Enum):
