@@ -48,7 +48,6 @@ class Settings(BaseSettings):
             specify one explicitly.
         LITELLM_VISION_MODEL: Optional vision/VLM model for diagram grading.
             When empty, ``LITELLM_MODEL`` is used (e.g. Kimi K2.6 multimodal).
-        DEEPGRAM_API_KEY: API key for the Deepgram speech-to-text service.
         TRANSCRIPTION_MODEL: LiteLLM model identifier used for speech-to-text
             transcription (e.g. ``"azure/whisper"``).
         QDRANT_URL: Base URL of the Qdrant vector database.

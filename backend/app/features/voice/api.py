@@ -29,6 +29,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.database import async_session
 from app.core.deps import get_db
 from app.core.logging import get_logger
+from app.features.voice.analysis import get_voice_session_analysis
 from app.features.voice.schemas import (
     VoiceAdaptiveInput,
     VoiceAdaptivePublicResponse,
@@ -358,7 +359,9 @@ async def process_voice_session(
 async def get_session_analysis(session_id: str) -> dict:
     """Return the current analysis state for a session.
 
-    Exposes only mastery level and dimension focus — no raw scores are returned.
+    Read-only: reads already-persisted rows and never writes to the database,
+    so it is safe to call on every frontend poll. Exposes only mastery level
+    and dimension focus — no raw scores are returned.
 
     Args:
         session_id: Owning assessment session identifier.
@@ -367,12 +370,10 @@ async def get_session_analysis(session_id: str) -> dict:
         A summary dict with total voice questions answered, mastery level,
         recommended focus dimension, and recommended probing depth.
     """
-    from app.features.voice.analysis import analyze_voice_session
-
-    analysis = await analyze_voice_session(session_id, current_question_index=0)
+    analysis = await get_voice_session_analysis(session_id)
     return {
         "session_id": session_id,
-        "total_voice_questions": analysis["total_cards"],
+        "total_voice_questions": analysis["card_count"],
         "mastery_level": analysis["mastery_level"],
         "focus_dimension": analysis.get("weakest_dimension"),
         "recommended_depth": analysis.get("recommended_follow_up_depth"),
