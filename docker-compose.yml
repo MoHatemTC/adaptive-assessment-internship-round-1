@@ -27,6 +27,7 @@ services:
     restart: unless-stopped
 
   worker:
+    profiles: ["worker"]
     build: ./backend
     command: celery -A app.workers.celery_app worker --loglevel=info
     env_file: .env
