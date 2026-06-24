@@ -40,6 +40,7 @@ _STANDALONE_ROUTER_MODULES = (
     "app.admin.api",
     "app.sessions.api",
     "app.proctoring.api",
+    "app.reports.api",
 )
 
 
