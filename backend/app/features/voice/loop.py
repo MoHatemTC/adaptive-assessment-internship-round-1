@@ -7,7 +7,9 @@ adapt (generate next question + build contract). Returns the full
 contract populated, ready for the caller to relay to the Generator Agent.
 """
 
+from app.config import get_settings
 from app.core.logging import get_logger
+from app.shared.memory_retrieval import enrich_memory_summary_for_adaptation
 from app.features.voice.adaptation import (
     build_voice_adaptive_contract,
     generate_next_voice_question,
@@ -54,6 +56,16 @@ async def run_voice_adaptive_loop(
     # Layer 8 — select next difficulty and generate the next question.
     prior_questions = analysis.get("prior_questions", [])
 
+    adaptation_query = (
+        f"Adaptive next question for {analysis.get('weakest_dimension', 'thinking')} "
+        f"after {input_data.target_difficulty} difficulty response."
+    )
+    memory_summary = await enrich_memory_summary_for_adaptation(
+        input_data.session_id,
+        eval_output.memory_summary,
+        adaptation_query,
+    )
+
     next_question_text, next_difficulty, follow_up_depth = (
         await generate_next_voice_question(
             analysis=analysis,
@@ -61,7 +73,7 @@ async def run_voice_adaptive_loop(
             admin_config=input_data.admin_config,
             current_difficulty=input_data.target_difficulty,
             current_question_index=input_data.question_index,
-            memory_summary=eval_output.memory_summary,
+            memory_summary=memory_summary,
             prior_questions=prior_questions,
         )
     )
@@ -73,7 +85,7 @@ async def run_voice_adaptive_loop(
         next_question_text=next_question_text,
         next_difficulty=next_difficulty,
         follow_up_depth=follow_up_depth,
-        memory_summary=eval_output.memory_summary,
+        memory_summary=memory_summary,
     )
 
     # Embed the contract plus the generated question into the output.

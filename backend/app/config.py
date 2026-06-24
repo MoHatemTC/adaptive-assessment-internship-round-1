@@ -53,6 +53,10 @@ class Settings(BaseSettings):
             transcription (e.g. ``"azure/whisper"``).
         QDRANT_URL: Base URL of the Qdrant vector database.
         QDRANT_API_KEY: API key for Qdrant (may be empty for local instances).
+        QDRANT_COLLECTION: Name of the Qdrant collection that stores platform
+            memory-card vectors.
+        EMBEDDING_MODEL: SentenceTransformers model id used to embed memory-card
+            evidence summaries before upserting them to Qdrant.
         LANGFUSE_PUBLIC_KEY: Langfuse public key for observability tracing.
         LANGFUSE_SECRET_KEY: Langfuse secret key for observability tracing.
         LANGFUSE_HOST: Base URL of the Langfuse server.
@@ -84,6 +88,8 @@ class Settings(BaseSettings):
     # ── Vector database ───────────────────────────────────────────────────────
     QDRANT_URL: str = ""
     QDRANT_API_KEY: str = ""
+    QDRANT_COLLECTION: str = "platform_memory"
+    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
     # ── Observability ─────────────────────────────────────────────────────────
     LANGFUSE_PUBLIC_KEY: SecretStr

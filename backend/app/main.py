@@ -14,6 +14,7 @@ Run with ``uvicorn app.main:app``.
 """
 
 import pkgutil
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib import import_module
@@ -40,6 +41,7 @@ _STANDALONE_ROUTER_MODULES = (
     "app.admin.api",
     "app.sessions.api",
     "app.proctoring.api",
+    "app.reports.api",
 )
 
 
@@ -122,6 +124,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "qdrant_startup_failed",
             reason="Qdrant unavailable at startup — continuing without it",
         )
+    try:
+        from app.shared.embedder import get_embedding_model
+
+        await asyncio.to_thread(get_embedding_model)
+    except Exception as exc:  # noqa: BLE001 - optional cold-start preload
+        _logger.warning("embedding_model_preload_skipped", reason=str(exc))
     _logger.info("app_startup_complete")
     yield
     _logger.info("app_shutdown_complete")
