@@ -16,6 +16,7 @@ If any node sets ``error`` in the state, downstream nodes skip their LLM
 calls and DB writes so the pipeline degrades gracefully.
 """
 
+import asyncio
 import json
 import operator
 from typing import Any, Optional
@@ -333,7 +334,8 @@ async def embed_and_store_node(state: MemoryAgentState) -> dict[str, Any]:
         if not evidence or not evidence.strip():
             return {}
 
-        vector = embed_text(evidence)
+        # SentenceTransformer.encode is CPU-bound; run off the event loop.
+        vector = await asyncio.to_thread(embed_text, evidence)
 
         client = get_qdrant_client()
         point = PointStruct(

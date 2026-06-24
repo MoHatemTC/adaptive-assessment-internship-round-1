@@ -25,7 +25,10 @@ def get_embedding_model():
 
 
 def embed_text(text: str) -> list[float]:
-    """Embed a single text string. Returns a list of floats."""
+    """Embed a single text string. Returns a list of floats.
+
+    Blocking (CPU-bound). Call from async code via ``asyncio.to_thread``.
+    """
     model = get_embedding_model()
     vector = model.encode(text, normalize_embeddings=True)
     return vector.tolist()
