@@ -28,6 +28,7 @@ def _mock_llm_gateway(payload: dict):
 
     bound = MagicMock()
     bound.ainvoke = AsyncMock(return_value=response)
+    bound.bind.return_value = bound
 
     llm = MagicMock()
     llm.bind.return_value = bound

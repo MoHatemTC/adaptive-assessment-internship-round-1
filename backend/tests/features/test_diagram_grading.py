@@ -71,6 +71,7 @@ async def test_call_grader_uses_kernel_gateway():
     response.content = json.dumps(payload)
     bound = MagicMock()
     bound.ainvoke = AsyncMock(return_value=response)
+    bound.bind.return_value = bound
     llm = MagicMock()
     llm.bind.return_value = bound
 
