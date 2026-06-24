@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol
 
-from grading import DIMENSIONS, GradeResult, Rubric
+from app.features.diagram.grading import DIMENSIONS, GradeResult, Rubric
 
 
 @dataclass(frozen=True)

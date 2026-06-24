@@ -2,8 +2,8 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
-from grading import GradeResult, JudgeVerdict, Rubric
-from evaluation_memory import build_memory_card, write_memory_card, grade_and_remember
+from app.features.diagram.grading import GradeResult, JudgeVerdict, Rubric
+from app.features.diagram.evaluation_memory import build_memory_card, write_memory_card, grade_and_remember
 
 
 def make_grade(verdict=JudgeVerdict.PASS):

@@ -2,9 +2,13 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-from grading import (
-    DiagramToolOutput, GradeResult, JudgeVerdict, Rubric,
-    _validate_scores, grade_visual_answer,
+from app.features.diagram.grading import (
+    DiagramToolOutput,
+    GradeResult,
+    JudgeVerdict,
+    Rubric,
+    _validate_scores,
+    grade_visual_answer,
 )
 
 
@@ -31,8 +35,8 @@ async def test_grade_visual_answer_pass(monkeypatch):
     grader_resp = {"dimension_scores": {"thinking": 0.7}, "reasoning": "ok", "confidence": 0.8}
     judge_resp = {"verdict": "pass", "notes": "consistent"}
 
-    with patch("grading._call_grader", AsyncMock(return_value=grader_resp)), \
-         patch("grading._call_judge", AsyncMock(return_value=judge_resp)):
+    with patch("app.features.diagram.grading._call_grader", AsyncMock(return_value=grader_resp)), \
+         patch("app.features.diagram.grading._call_judge", AsyncMock(return_value=judge_resp)):
         result = await grade_visual_answer(make_rubric(), make_answer())
 
     assert isinstance(result, GradeResult)
@@ -46,8 +50,8 @@ async def test_grade_visual_answer_judge_fails():
     grader_resp = {"dimension_scores": {"thinking": 0.9}, "reasoning": "shaky", "confidence": 0.4}
     judge_resp = {"verdict": "fail", "notes": "hallucinated claim"}
 
-    with patch("grading._call_grader", AsyncMock(return_value=grader_resp)), \
-         patch("grading._call_judge", AsyncMock(return_value=judge_resp)):
+    with patch("app.features.diagram.grading._call_grader", AsyncMock(return_value=grader_resp)), \
+         patch("app.features.diagram.grading._call_judge", AsyncMock(return_value=judge_resp)):
         result = await grade_visual_answer(make_rubric(), make_answer())
 
     assert result.is_trusted is False

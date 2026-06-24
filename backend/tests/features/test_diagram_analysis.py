@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from evaluation_memory import VisualMemoryCard
-from analysis import aggregate_dimensions, _confidence_from, _recency_weight
+from app.features.diagram.evaluation_memory import VisualMemoryCard
+from app.features.diagram.analysis import aggregate_dimensions, _confidence_from, _recency_weight
 
 
 def make_card(scores, minutes_ago=0):

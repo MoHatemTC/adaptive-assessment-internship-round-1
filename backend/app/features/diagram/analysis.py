@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
 
-from evaluation_memory import VisualMemoryCard
-from grading import DIMENSIONS
+from app.features.diagram.evaluation_memory import VisualMemoryCard
+from app.features.diagram.grading import DIMENSIONS
 
 
 HALF_LIFE_QUESTIONS = 3.0   # recency decay: card N questions ago has weight 0.5^(N/HALF_LIFE)
