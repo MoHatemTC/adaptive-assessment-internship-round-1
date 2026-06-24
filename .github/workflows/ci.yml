@@ -67,10 +67,7 @@ jobs:
         working-directory: backend
       - name: Run backend tests
         working-directory: backend
-        run: |
-          pytest tests/ -q --ignore=tests/integration \
-            --deselect tests/features/test_voice.py::test_create_voice_session \
-            --deselect tests/proctoring/test_proctoring_api.py::test_record_event_via_api
+        run: pytest tests/ -q --ignore=tests/integration
 
   frontend:
     runs-on: ubuntu-latest
