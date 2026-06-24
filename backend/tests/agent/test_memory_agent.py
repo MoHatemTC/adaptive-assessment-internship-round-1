@@ -420,3 +420,53 @@ async def test_embed_and_store_node_skips_on_qdrant_failure():
 
     # Must not set error — Qdrant is non-critical.
     assert result.get("error") is None
+
+
+@pytest.mark.asyncio
+async def test_embed_and_store_node_upserts_vector_and_payload():
+    """Happy path: 384-dim vector and session payload are sent to Qdrant."""
+    from app.agent.memory_agent import embed_and_store_node
+
+    session_id = "test-session-id-1234567890123"
+    mock_card = MemoryCardRead(
+        id=1,
+        session_id=session_id,
+        tool_type="voice",
+        question_index=2,
+        difficulty="intermediate",
+        evidence_summary="Learner demonstrated clear understanding",
+        dimension_signals=DimensionSignals(),
+        passed=True,
+        created_at=_NOW,
+    )
+
+    state = {
+        "session_id": session_id,
+        "saved_card": mock_card,
+        "error": None,
+    }
+
+    vector = [0.25] * 384
+    mock_upsert = AsyncMock()
+
+    with (
+        patch("app.shared.embedder.embed_text", return_value=vector),
+        patch("app.shared.qdrant.get_qdrant_client") as mock_client,
+        patch("app.config.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.QDRANT_COLLECTION = "platform_memory"
+        mock_client.return_value.upsert = mock_upsert
+        result = await embed_and_store_node(state)
+
+    assert result.get("error") is None
+    mock_upsert.assert_awaited_once()
+    kwargs = mock_upsert.await_args.kwargs
+    assert kwargs["collection_name"] == "platform_memory"
+    point = kwargs["points"][0]
+    assert point.vector == vector
+    assert point.payload["session_id"] == session_id
+    assert point.payload["tool_type"] == "voice"
+    assert point.payload["question_index"] == 2
+    assert point.payload["difficulty"] == "intermediate"
+    assert point.payload["passed"] is True
+    assert point.payload["evidence_summary"] == mock_card.evidence_summary
