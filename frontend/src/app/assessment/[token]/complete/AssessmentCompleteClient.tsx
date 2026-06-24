@@ -8,6 +8,11 @@ import { SessionRadarReportView } from "@/features/report/SessionRadarReportView
 export function AssessmentCompleteClient({ token }: { token: string }) {
   const search = useSearchParams();
   const sessionId = search.get("session_id");
+  const accessToken =
+    search.get("access_token") ??
+    (typeof window !== "undefined"
+      ? sessionStorage.getItem("masaar_session_token")
+      : null);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-4 py-8">
@@ -19,7 +24,10 @@ export function AssessmentCompleteClient({ token }: { token: string }) {
       </header>
 
       {sessionId ? (
-        <SessionRadarReportView sessionId={sessionId} />
+        <SessionRadarReportView
+          sessionId={sessionId}
+          accessToken={accessToken ?? undefined}
+        />
       ) : (
         <p className="text-sm text-neutral/70">
           No session id provided — radar report unavailable.

@@ -44,6 +44,7 @@ slowapi==0.1.9
 
 # ── Auth ─────────────────────────────────────────────────────
 python-jose[cryptography]==3.3.0
+python-multipart==0.0.20
 
 # ── Validation / Config ──────────────────────────────────────
 pydantic==2.11.5

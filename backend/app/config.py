@@ -98,6 +98,8 @@ class Settings(BaseSettings):
 
     # ── Security / runtime ────────────────────────────────────────────────────
     SECRET_KEY: SecretStr
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: SecretStr = SecretStr("admin")
     ENVIRONMENT: str = "development"
 
     @field_validator("DATABASE_URL")
