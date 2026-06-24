@@ -92,20 +92,33 @@ class TestToolExecution:
 
     @pytest.mark.asyncio
     async def test_missing_api_key(self):
+        """Without E2B_API_KEY execution routes to the local dev fallback."""
+        expected_result = CodeTestCaseResult(
+            test_case_id="1",
+            passed=True,
+            actual_output="a",
+            expected_output="a",
+            execution_time_ms=1.0,
+        )
         with patch.dict(os.environ, {}, clear=True):
-            outcome, results, error = await tool.execute_submission(
-                "def solution(s): return s",
-                [
-                    CodeTestCaseDTO(
-                        id="1",
-                        input="print(solution('a'))",
-                        expected_output="a",
-                    )
-                ],
-            )
-        assert outcome == ExecutionOutcome.SANDBOX_UNAVAILABLE
-        assert results == []
-        assert error is not None
+            with patch(
+                "app.features.code.tool._run_locally",
+                return_value=(ExecutionOutcome.SUCCESS, [expected_result], None),
+            ) as mock_local:
+                outcome, results, error = await tool.execute_submission(
+                    "def solution(s): return s",
+                    [
+                        CodeTestCaseDTO(
+                            id="1",
+                            input="print(solution('a'))",
+                            expected_output="a",
+                        )
+                    ],
+                )
+        mock_local.assert_called_once()
+        assert outcome == ExecutionOutcome.SUCCESS
+        assert results == [expected_result]
+        assert error is None
 
     @pytest.mark.asyncio
     async def test_successful_solution_mocked(self):
