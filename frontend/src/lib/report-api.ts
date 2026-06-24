@@ -39,9 +39,15 @@ export interface SessionRadarReport {
 
 export function getSessionRadarReport(
   sessionId: string,
+  options?: { accessToken?: string },
 ): Promise<SessionRadarReport> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (options?.accessToken) {
+    headers.Authorization = `Bearer ${options.accessToken}`;
+  }
+
   return fetch(apiUrl(`/api/v1/reports/sessions/${sessionId}/radar`), {
-    headers: { Accept: "application/json" },
+    headers,
   }).then(async (response) => {
     if (!response.ok) {
       let detail = `Request failed with status ${response.status}`;

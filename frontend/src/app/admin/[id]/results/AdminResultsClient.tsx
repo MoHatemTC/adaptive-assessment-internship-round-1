@@ -8,6 +8,8 @@ export function AdminResultsClient() {
   const params = useParams<{ id: string }>();
   const search = useSearchParams();
   const sessionId = search.get("session_id");
+  const adminToken =
+    typeof window !== "undefined" ? localStorage.getItem("masaar_admin_token") : null;
 
   return (
     <main className="mx-auto min-h-screen max-w-4xl space-y-6 px-4 py-8">
@@ -23,6 +25,7 @@ export function AdminResultsClient() {
         <SessionRadarReportView
           sessionId={sessionId}
           title="Candidate skill profile"
+          accessToken={adminToken ?? undefined}
         />
       ) : (
         <p className="text-sm text-neutral/70">

@@ -87,7 +87,7 @@ async def build_session_radar_report(
 ) -> SessionRadarReport:
     """Aggregate platform scores and memory highlights into a radar report."""
     score_rows = (
-        await db.exec(
+        await db.scalars(
             select(SkillDimensionScore)
             .where(SkillDimensionScore.session_id == session_id)
             .order_by(SkillDimensionScore.question_index)
@@ -95,7 +95,7 @@ async def build_session_radar_report(
     ).all()
 
     memory_rows = (
-        await db.exec(
+        await db.scalars(
             select(MemoryCard)
             .where(MemoryCard.session_id == session_id)
             .order_by(MemoryCard.question_index.desc())

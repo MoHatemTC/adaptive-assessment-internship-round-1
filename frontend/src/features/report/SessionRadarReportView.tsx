@@ -12,11 +12,13 @@ import {
 export interface SessionRadarReportViewProps {
   sessionId: string;
   title?: string;
+  accessToken?: string;
 }
 
 export function SessionRadarReportView({
   sessionId,
   title = "Your skill profile",
+  accessToken,
 }: SessionRadarReportViewProps) {
   const [report, setReport] = useState<SessionRadarReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +28,7 @@ export function SessionRadarReportView({
     let cancelled = false;
     (async () => {
       try {
-        const loaded = await getSessionRadarReport(sessionId);
+        const loaded = await getSessionRadarReport(sessionId, { accessToken });
         if (!cancelled) setReport(loaded);
       } catch (err) {
         if (!cancelled) {
@@ -39,7 +41,7 @@ export function SessionRadarReportView({
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, accessToken]);
 
   if (loading) {
     return <p className="text-sm text-neutral/70">Generating your report…</p>;

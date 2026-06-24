@@ -47,7 +47,10 @@ class AssessmentSession(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     # "pending" / "active" / "completed" / "expired" / "flagged"
     code_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    # Bridge to coding tool's internal assess-* session ID
+    token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     started_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

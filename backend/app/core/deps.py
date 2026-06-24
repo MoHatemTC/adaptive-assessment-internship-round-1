@@ -15,6 +15,7 @@ referenced via ``Any`` with a ``TODO`` rather than importing feature code.
 
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends
@@ -77,21 +78,20 @@ async def get_session_by_token(
     """
     hashed_token = hash_token(token)
 
-    # TODO: replace with AssessmentSession lookup once app/sessions/ is built.
-    #   from sqlmodel import select
-    #   result = await db.exec(
-    #       select(AssessmentSession).where(
-    #           AssessmentSession.token_hash == hashed_token,
-    #           AssessmentSession.expires_at > datetime.now(timezone.utc),
-    #       )
-    #   )
-    #   session = result.first()
-    #   if session is None:
-    #       raise session_not_found_exception()
-    #   return session
-    _ = (hashed_token, db)  # keep references live until the lookup is wired up
-    _logger.warning("session_lookup_not_implemented")
-    raise session_not_found_exception()
+    from sqlmodel import select
+
+    from app.sessions.models import AssessmentSession
+
+    result = await db.exec(
+        select(AssessmentSession).where(
+            AssessmentSession.token_hash == hashed_token,
+            AssessmentSession.expires_at > datetime.now(timezone.utc),
+        )
+    )
+    session = result.first()
+    if session is None:
+        raise session_not_found_exception()
+    return session
 
 
 async def get_current_admin(token: str = Depends(oauth2_scheme)) -> dict[str, Any]:
