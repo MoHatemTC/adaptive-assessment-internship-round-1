@@ -21,7 +21,6 @@ Everything is SQLModel 2.0 / SQLAlchemy 2.0 style and fully async:
 application never calls ``create_all()``.
 """
 
-import os
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 
@@ -29,7 +28,6 @@ from sqlalchemy import DateTime, func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.pool import NullPool
 from sqlmodel import Field, SQLModel
 
 # VERIFY: SQLModel's async session lives at sqlmodel.ext.asyncio.session on
@@ -48,21 +46,12 @@ _logger = get_logger(__name__)
 #: burst connections. ``pool_pre_ping`` transparently discards stale connections
 #: and ``pool_recycle`` caps connection lifetime so the server never serves a
 #: dead socket.
-#: In GitHub Actions, use :class:`~sqlalchemy.pool.NullPool` so asyncpg
-#: connections are not reused across pytest's per-test event loops.
-_engine_kwargs: dict[str, object] = {
-    "pool_pre_ping": True,
-    "pool_recycle": 3600,
-}
-if os.getenv("GITHUB_ACTIONS") == "true":
-    _engine_kwargs["poolclass"] = NullPool
-else:
-    _engine_kwargs["pool_size"] = 10
-    _engine_kwargs["max_overflow"] = 20
-
 engine = create_async_engine(
     _settings.DATABASE_URL,
-    **_engine_kwargs,
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True,
+    pool_recycle=3600,
 )
 
 #: Session factory bound to :data:`engine`. ``expire_on_commit=False`` keeps ORM

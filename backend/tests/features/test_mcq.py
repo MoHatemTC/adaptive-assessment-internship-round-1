@@ -34,8 +34,8 @@ async def reset_mcq_tables() -> None:
     Create MCQ tables if needed and clean MCQ data before each database test.
 
     Tables are registered on the SQLAlchemy 2.0 ``Base`` metadata now that the
-    models use the declarative ``Mapped`` style. ``engine.dispose()`` avoids
-    Windows asyncpg event-loop reuse issues between pytest async tests.
+    models use the declarative ``Mapped`` style. The shared test engine is
+    configured in ``tests/conftest.py`` (session-scoped loop + NullPool).
     """
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -45,8 +45,6 @@ async def reset_mcq_tables() -> None:
         await db.exec(delete(MCQOption))
         await db.exec(delete(MCQQuestion))
         await db.commit()
-
-    await engine.dispose()
 
 
 @pytest.fixture
@@ -59,7 +57,6 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         finally:
             await db.rollback()
             await db.close()
-            await engine.dispose()
 
 
 async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:

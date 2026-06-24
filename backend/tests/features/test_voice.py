@@ -30,8 +30,8 @@ async def reset_voice_tables() -> None:
     Create voice tables if needed and clean voice data before each DB test.
 
     Tables are registered on the SQLAlchemy 2.0 ``Base`` metadata. Transcripts
-    are deleted before sessions to respect the foreign key. ``engine.dispose()``
-    avoids Windows asyncpg event-loop reuse issues between pytest async tests.
+    are deleted before sessions to respect the foreign key. The shared test
+    engine is configured in ``tests/conftest.py`` (session-scoped loop + NullPool).
     """
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -40,8 +40,6 @@ async def reset_voice_tables() -> None:
         await db.exec(delete(VoiceTranscript))
         await db.exec(delete(VoiceSession))
         await db.commit()
-
-    await engine.dispose()
 
 
 @pytest.fixture
@@ -54,7 +52,6 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         finally:
             await db.rollback()
             await db.close()
-            await engine.dispose()
 
 
 async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
