@@ -18,6 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.admin.models import Assessment
 from app.core.logging import get_logger
 from app.sessions.models import AssessmentSession, SkillDimensionScore
+from app.shared.memory_retrieval import enrich_memory_summary_for_adaptation
 from app.shared.schemas.memory import (
     AdaptiveContract,
     DifficultyLevel,
@@ -236,6 +237,13 @@ async def compute_adaptive_contract(
             f"After {answered} question(s) the learner averages {avg_engaged}/10 on "
             f"engaged dimensions; next focus on '{focus_dimension}'."
         )
+
+    memory_summary = await enrich_memory_summary_for_adaptation(
+        session_id,
+        memory_summary,
+        f"Next coding challenge emphasizing {focus_dimension or 'thinking'}.",
+        tool_type="coding",
+    )
 
     contract = AdaptiveContract(
         session_id=session_id,

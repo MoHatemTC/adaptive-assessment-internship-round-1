@@ -324,12 +324,11 @@ async def embed_and_store_node(state: MemoryAgentState) -> dict[str, Any]:
 
         from qdrant_client.models import PointStruct
 
+        from app.config import get_settings
         from app.shared.embedder import embed_text
-        from app.shared.qdrant import (
-            COLLECTION_PLATFORM_MEMORY,
-            get_qdrant_client,
-        )
+        from app.shared.qdrant import get_qdrant_client
 
+        settings = get_settings()
         evidence = card.evidence_summary
         if not evidence or not evidence.strip():
             return {}
@@ -351,7 +350,7 @@ async def embed_and_store_node(state: MemoryAgentState) -> dict[str, Any]:
             },
         )
         await client.upsert(
-            collection_name=COLLECTION_PLATFORM_MEMORY,
+            collection_name=settings.QDRANT_COLLECTION,
             points=[point],
         )
         logger.info(
