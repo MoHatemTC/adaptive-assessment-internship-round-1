@@ -190,3 +190,12 @@ class SessionIntegritySummary(BaseModel):
     threshold: int = Field(ge=1)
     identity_verified: bool
     events: list[ProctoringEventRead]
+
+
+class SessionIntegritySnapshot(BaseModel):
+    """Lightweight integrity view embedded in session and report contracts."""
+
+    verification_status: VerificationStatus
+    high_severity_count: int = Field(ge=0)
+    threshold: int = Field(ge=1)
+    identity_verified: bool

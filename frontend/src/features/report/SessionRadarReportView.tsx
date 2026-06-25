@@ -76,6 +76,19 @@ export function SessionRadarReportView({
               {tool}
             </span>
           ))}
+          {report.integrity ? (
+            <span
+              className={`rounded-full px-3 py-1 capitalize ${
+                report.integrity.verification_status === "verified"
+                  ? "bg-success/10 text-success"
+                  : report.integrity.verification_status === "flagged"
+                    ? "bg-error/10 text-error"
+                    : "bg-surface-muted text-neutral/70"
+              }`}
+            >
+              Integrity: {report.integrity.verification_status.replace("_", " ")}
+            </span>
+          ) : null}
         </div>
       </header>
 

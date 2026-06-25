@@ -11,6 +11,6 @@ export default async function AssessmentPage({
 }: AssessmentPageProps) {
   const { token } = await params;
   const query = await searchParams;
-  const sessionId = query.session_id ?? crypto.randomUUID();
-  redirect(`/assessment/${token}/verify?session_id=${encodeURIComponent(sessionId)}`);
+  const sessionId = query.session_id;
+  redirect(`/assessment/${token}/verify${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`);
 }

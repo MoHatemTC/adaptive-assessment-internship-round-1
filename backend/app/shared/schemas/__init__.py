@@ -28,6 +28,7 @@ from app.shared.schemas.proctoring import (
     ProctoringPolicyResponse,
     ProctoringSeverity,
     SessionIntegritySummary,
+    SessionIntegritySnapshot,
     VerificationStatus,
 )
 
@@ -55,6 +56,7 @@ __all__ = [
     "RubricDimension",
     "RubricScores",
     "SessionIntegritySummary",
+    "SessionIntegritySnapshot",
     "SkillDimensionScoreCreate",
     "ToolType",
     "VerificationStatus",

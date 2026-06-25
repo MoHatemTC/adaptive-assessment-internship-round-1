@@ -18,6 +18,7 @@ from app.shared.schemas.proctoring import (
     ProctoringSeverity,
     ProctoringEventType,
     SessionIntegritySummary,
+    SessionIntegritySnapshot,
     VerificationStatus,
 )
 
@@ -39,5 +40,6 @@ __all__ = [
     "ProctoringPolicyResponse",
     "ProctoringSeverity",
     "SessionIntegritySummary",
+    "SessionIntegritySnapshot",
     "VerificationStatus",
 ]

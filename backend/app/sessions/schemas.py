@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.shared.schemas.proctoring import SessionIntegritySnapshot
+
 
 class LearnerProfile(BaseModel):
     name: str = ""
@@ -35,3 +37,4 @@ class SessionRead(BaseModel):
     completed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    integrity: SessionIntegritySnapshot | None = None
