@@ -162,3 +162,77 @@ async def analyze_voice_session(
         "recommended_follow_up_depth": follow_up_depth,
         "prior_questions": prior_questions,
     }
+
+
+async def get_voice_session_analysis(session_id: str) -> dict[str, Any]:
+    """Read-only view of a session's current analysis state.
+
+    Reads only already-persisted ``MemoryCard`` and ``SkillDimensionScore``
+    rows. Never computes a fresh aggregation and never writes to the
+    database — safe to call on every frontend poll, unlike
+    :func:`analyze_voice_session`, which both aggregates and persists a new
+    ``skill_dimension_scores`` row on every call.
+
+    Args:
+        session_id: Owning assessment session identifier.
+
+    Returns:
+        A dict with ``session_id``, ``card_count``, ``pass_rate``,
+        ``mastery_level``, ``weakest_dimension``, ``question_count``, and
+        ``recommended_follow_up_depth``. Cold-start values if no data exists.
+    """
+    async with async_session() as db:
+        card_stmt = (
+            select(MemoryCard)
+            .where(MemoryCard.session_id == session_id)
+            .where(MemoryCard.tool_type == "voice")
+        )
+        card_result = await db.execute(card_stmt)
+        cards = card_result.scalars().all()
+
+        card_count = len(cards)
+        passed_count = sum(1 for card in cards if card.passed)
+        pass_rate = passed_count / card_count if card_count > 0 else 0.0
+
+        if card_count == 0:
+            mastery_level = "unknown"
+        elif pass_rate >= 0.7:
+            mastery_level = "high"
+        elif pass_rate <= 0.3:
+            mastery_level = "low"
+        else:
+            mastery_level = "medium"
+        follow_up_depth = "deep" if mastery_level == "high" else "simple"
+
+        score_stmt = (
+            select(SkillDimensionScore)
+            .where(SkillDimensionScore.session_id == session_id)
+            .where(SkillDimensionScore.tool_type == "voice")
+            .order_by(SkillDimensionScore.question_index.desc())
+        )
+        score_result = await db.execute(score_stmt)
+        score_rows = score_result.scalars().all()
+
+        question_count = len(score_rows)
+        weakest_dimension = None
+        if score_rows:
+            latest = score_rows[0]
+            dim_scores = {
+                dim: getattr(latest, dim)
+                for dim in _DIMENSIONS
+                if getattr(latest, dim) is not None
+            }
+            if dim_scores:
+                weakest_dimension = min(dim_scores, key=lambda d: dim_scores[d])
+
+    logger.info("voice_analysis_read", session_id=session_id, card_count=card_count)
+
+    return {
+        "session_id": session_id,
+        "card_count": card_count,
+        "pass_rate": pass_rate,
+        "mastery_level": mastery_level,
+        "weakest_dimension": weakest_dimension,
+        "question_count": question_count,
+        "recommended_follow_up_depth": follow_up_depth,
+    }

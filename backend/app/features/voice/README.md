@@ -131,16 +131,6 @@ When STT is unavailable:
 - Adaptive loop continues with LLM-only question generation
 - Dimension scores reflect question difficulty only
 
-### Upgrade path
-
-If latency or accuracy becomes a production concern, replace
-_transcribe_chunk to use Deepgram Nova-2 streaming by:
-1. Re-add deepgram-sdk>=7.2.0 to requirements.txt
-2. Add DEEPGRAM_API_KEY to config.py and .env
-3. Replace litellm.atranscription() with AsyncDeepgramClient
-The rest of the evaluation layer (flagging, grading, memory)
-is STT-agnostic and requires no changes.
-
 ## Running Tests
 
 ```bash

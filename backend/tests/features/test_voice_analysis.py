@@ -4,16 +4,20 @@ DB access and LLM calls are mocked so the suite runs without a live database or
 API key, mirroring the mock patterns in test_voice_evaluation.py.
 """
 
+import itertools
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app.features.voice.adaptation import (
     _select_next_difficulty,
     generate_next_voice_question,
 )
 from app.features.voice.analysis import analyze_voice_session
+from app.features.voice.api import router as voice_router
 
 _ANALYSIS = "app.features.voice.analysis"
 _ADAPT = "app.features.voice.adaptation"
@@ -61,6 +65,23 @@ def _cards_db(cards: list) -> AsyncMock:
     mock_result.scalars.return_value.all.return_value = cards
     mock_db = AsyncMock()
     mock_db.execute = AsyncMock(return_value=mock_result)
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    return mock_db
+
+
+def _read_only_analysis_db(cards: list, score_rows: list) -> AsyncMock:
+    """Mock db whose ``execute`` alternates between a card query result and a
+    score query result, repeating indefinitely so it survives multiple
+    sequential calls to ``get_voice_session_analysis`` within one test."""
+    card_result = MagicMock()
+    card_result.scalars.return_value.all.return_value = cards
+    score_result = MagicMock()
+    score_result.scalars.return_value.all.return_value = score_rows
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(
+        side_effect=itertools.cycle([card_result, score_result])
+    )
     mock_db.add = MagicMock()
     mock_db.commit = AsyncMock()
     return mock_db
@@ -264,3 +285,34 @@ async def test_follow_up_depth_capped_by_blueprint():
             deep_analysis, {}, {"max_follow_up_depth": "deep"}, "beginner", 0, ""
         )
     assert allowed == "deep"
+
+
+# ---------------------------------------------------------------------------
+# Test 12 — GET /analysis never writes to the database
+# ---------------------------------------------------------------------------
+
+def test_get_analysis_endpoint_does_not_write_to_db():
+    """
+    Verify that GET /voice/adaptive/sessions/{sid}/analysis
+    never writes to the database regardless of how many times
+    it is called. A GET endpoint must be read-only.
+    """
+    cards = [_mock_card(_signals(thinking=True), passed=True) for _ in range(2)]
+    mock_db = _read_only_analysis_db(cards, [])
+
+    app = FastAPI()
+    app.include_router(voice_router)
+    client = TestClient(app)
+
+    with patch(f"{_ANALYSIS}.async_session", return_value=_make_session_mock(mock_db)):
+        response_1 = client.get(
+            "/voice/adaptive/sessions/test-session-uuid/analysis"
+        )
+        response_2 = client.get(
+            "/voice/adaptive/sessions/test-session-uuid/analysis"
+        )
+
+    assert response_1.status_code == 200
+    assert response_2.status_code == 200
+    mock_db.add.assert_not_called()
+    mock_db.commit.assert_not_called()
