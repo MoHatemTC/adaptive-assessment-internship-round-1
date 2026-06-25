@@ -18,13 +18,13 @@ from app.features.adaptation.schemas import AnswerRecord
 
 
 async def _fetch_diagram_answers(db: AsyncSession, session_id: uuid.UUID) -> list[AnswerRecord]:
-    from app.features.diagram.models import DiagramAnswer
+    from app.features.diagram.models import DiagramResponse
 
     result = await db.execute(
-        select(DiagramAnswer)
-        .options(selectinload(DiagramAnswer.question))
-        .where(DiagramAnswer.session_id == session_id)
-        .where(DiagramAnswer.score.isnot(None))
+        select(DiagramResponse)
+        .options(selectinload(DiagramResponse.question))
+        .where(DiagramResponse.session_id == str(session_id))
+        .where(DiagramResponse.score.isnot(None))
     )
     rows = result.scalars().all()
     return [

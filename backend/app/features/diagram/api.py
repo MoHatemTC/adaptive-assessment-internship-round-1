@@ -1,98 +1,112 @@
-"""
-api.py — FastAPI router for the diagram feature.
-
-Routes:
-  GET  /diagram/{question_id}         → DiagramQuestionResponse
-  POST /diagram/{question_id}/answer  → DiagramAnswerResponse
-
-The router is registered in the main app with prefix="/diagram".
-Both routes are used by the agent (tool.py) and the frontend (DiagramView.tsx).
-"""
-
-import uuid
+"""FastAPI routes for the SVG diagram feature."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.core.database import get_db
+from app.core.deps import get_db
+from app.core.logging import get_logger
+from app.features.diagram.llm_generation import generate_and_store_next_diagram
+from app.features.diagram.loop import run_diagram_loop
 from app.features.diagram.schemas import (
-    DiagramQuestionResponse,
     DiagramAnswerRequest,
     DiagramAnswerResponse,
+    DiagramCreateRequest,
+    DiagramNextQuestion,
+    DiagramQuestionResponse,
 )
-from app.features.diagram.service import DiagramService
+from app.features.diagram.service import create_question, get_question, submit_response
+
+_logger = get_logger(__name__)
 
 router = APIRouter(prefix="/diagram", tags=["diagram"])
-_service = DiagramService()
 
 
-@router.get(
-    "/{question_id}",
-    response_model=DiagramQuestionResponse,
-    summary="Fetch a diagram question (image URL + prompt + difficulty)",
-)
-async def get_diagram_question(
-    question_id: uuid.UUID,
+@router.get("/health")
+def diagram_health_check() -> dict:
+    return {"status": "ready", "feature": "diagram"}
+
+
+@router.post("/questions", response_model=DiagramQuestionResponse)
+async def create_diagram_question(
+    payload: DiagramCreateRequest,
     db: AsyncSession = Depends(get_db),
-) -> DiagramQuestionResponse:
-    """
-    Returns the diagram item for the learner:
-      - served/signed image_url  (ready for <img> in DiagramView.tsx)
-      - prompt                   (the question to answer)
-      - difficulty + dimension   (used by agent for adaptation)
+) -> dict:
+    return await create_question(
+        db=db,
+        svg_content=payload.svg_content,
+        prompt=payload.prompt,
+        correct_label=payload.correct_label,
+        rubric=payload.rubric,
+        difficulty=payload.difficulty,
+        dimension=payload.dimension,
+    )
 
-    Rubric is NOT included — it stays server-side for silent grading.
-    """
-    question = await _service.fetch_question(db, question_id)
-    if question is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Diagram question {question_id} not found",
-        )
-    return DiagramQuestionResponse.model_validate(question)
+
+@router.get("/questions/{question_id}", response_model=DiagramQuestionResponse)
+async def get_diagram_question(
+    question_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await get_question(db=db, question_id=question_id)
 
 
 @router.post(
-    "/{question_id}/answer",
+    "/sessions/{session_id}/answer",
     response_model=DiagramAnswerResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Submit a learner text answer — persisted and graded silently",
 )
-async def submit_diagram_answer(
-    question_id: uuid.UUID,
-    body: DiagramAnswerRequest,
+async def submit_adaptive_diagram_answer(
+    session_id: str,
+    payload: DiagramAnswerRequest,
     db: AsyncSession = Depends(get_db),
 ) -> DiagramAnswerResponse:
-    """
-    Accepts the learner's text answer, persists it as a DiagramAnswer record
-    (queryable by session_id), then grades it silently using the vision model.
-
-    Returns a structured grading result to the agent.
-    Score and feedback are NEVER forwarded to the learner mid-session.
-    """
     try:
-        answer = await _service.submit_answer(
+        result = await submit_response(
             db=db,
-            question_id=question_id,
-            session_id=body.session_id,
-            answer_text=body.answer_text,
+            question_id=payload.question_id,
+            session_id=session_id,
+            answer_text=payload.answer_text,
+            learner_id=payload.learner_id,
         )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
-        )
+        ) from exc
+
+    await db.flush()
+
+    loop_result = await run_diagram_loop(
+        session_id=session_id,
+        question_index=payload.question_index,
+        diagram_response_id=result["response_id"],
+        total_questions=payload.total_questions,
+        db=db,
+    )
+    is_complete = loop_result["is_complete"]
+
+    next_question: DiagramNextQuestion | None = None
+    if not is_complete:
+        next_plan = {
+            "next_question_index": payload.question_index + 1,
+            "memory_summary": loop_result.get("memory_summary", ""),
+        }
+        try:
+            generated = await generate_and_store_next_diagram(
+                db=db,
+                next_plan=next_plan,
+                learner_profile=payload.learner_profile,
+                admin_config=payload.admin_config,
+            )
+            next_question = DiagramNextQuestion(
+                id=generated["id"],
+                svg_content=generated["svg_content"],
+                prompt=generated["prompt"],
+                difficulty=generated["difficulty"],
+                dimension=generated.get("dimension"),
+            )
+        except Exception as exc:  # noqa: BLE001 - generation must not break session
+            _logger.error("diagram_next_generation_failed", error=str(exc))
+            next_question = None
 
     await db.commit()
-
-    question = await _service.fetch_question(db, question_id)
-
-    return DiagramAnswerResponse(
-        answer_id=answer.id,
-        session_id=answer.session_id,
-        question_id=answer.question_id,
-        score=answer.score,
-        dimension=question.dimension,
-        grading_feedback=answer.grading_feedback,
-        graded_at=answer.graded_at,
-    )
+    return DiagramAnswerResponse(next_question=next_question, is_complete=is_complete)

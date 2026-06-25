@@ -1,132 +1,180 @@
-"""
-test_diagram.py
-Three groups:
-  1. Image validation  — bad MIME, oversized, valid JPEG
-  2. API round-trip    — GET shape/404, POST persists + returns grading
-  3. Vision format     — image arrives as content block, not text
-"""
-
-import base64
-import uuid
-import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import AsyncGenerator
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from sqlalchemy import delete
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.main import app
-from app.features.diagram.models import Difficulty, DiagramAnswer, DiagramQuestion, SkillDimension
+from app.core.database import Base, async_session, engine
+from app.features.diagram.models import DiagramQuestion, DiagramResponse
 from app.features.diagram.service import (
-    MAX_IMAGE_BYTES,
-    _build_vision_message,
-    _fetch_and_validate_image,
+    create_question,
+    get_correct_label,
+    get_question,
+    grade_answer,
+    submit_response,
 )
 
-client = TestClient(app)
-
-Q_ID = uuid.uuid4()
-S_ID = uuid.uuid4()
+SVG = '<svg width="600" height="400"><rect/><text>[?]</text></svg>'
 
 
-def _fake_question():
-    return DiagramQuestion(
-        id=Q_ID,
-        image_url="https://cdn.example.com/q1.jpg",
-        prompt="Label the network diagram.",
-        rubric="1 point per correct label.",
-        difficulty=Difficulty.medium,
-        dimension=SkillDimension.digital_ai,
+async def reset_diagram_tables() -> None:
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with async_session() as db:
+        await db.exec(delete(DiagramResponse))
+        await db.exec(delete(DiagramQuestion))
+        await db.commit()
+
+
+@pytest.fixture
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    await reset_diagram_tables()
+    async with async_session() as db:
+        try:
+            yield db
+        finally:
+            await db.rollback()
+            await db.close()
+
+
+async def _question(db: AsyncSession) -> dict:
+    return await create_question(
+        db=db,
+        svg_content=SVG,
+        prompt="What is [?]?",
+        correct_label="Load Balancer",
+        rubric="Accept LB.",
+        dimension="digital_ai",
     )
 
 
-def _fake_answer():
-    return DiagramAnswer(
-        id=uuid.uuid4(),
-        session_id=S_ID,
-        question_id=Q_ID,
-        answer_text="Router in centre, three switches.",
-        score=0.8,
-        grading_feedback="Correct router; missed one switch.",
-        graded_at=datetime.datetime.utcnow(),
-    )
-
-
-def _mock_http(content_type: str, content: bytes):
-    r = MagicMock()
-    r.headers = {"content-type": content_type}
-    r.content = content
-    r.raise_for_status = MagicMock()
-    return r
+@pytest.mark.asyncio
+async def test_create_question_excludes_correct_label(db_session):
+    result = await _question(db_session)
+    assert "correct_label" not in result
 
 
 @pytest.mark.asyncio
-async def test_rejects_bad_mime():
-    with patch("httpx.AsyncClient.get", return_value=_mock_http("application/pdf", b"%PDF")):
-        with pytest.raises(ValueError, match="Unsupported image type"):
-            await _fetch_and_validate_image("https://example.com/file.pdf")
+async def test_create_question_excludes_rubric(db_session):
+    result = await _question(db_session)
+    assert "rubric" not in result
 
 
 @pytest.mark.asyncio
-async def test_rejects_oversized():
-    big = b"\x00" * (MAX_IMAGE_BYTES + 1)
-    with patch("httpx.AsyncClient.get", return_value=_mock_http("image/jpeg", big)):
-        with pytest.raises(ValueError, match="Image too large"):
-            await _fetch_and_validate_image("https://example.com/big.jpg")
+async def test_get_question_excludes_correct_label(db_session):
+    created = await _question(db_session)
+    result = await get_question(db_session, created["id"])
+    assert "correct_label" not in result
 
 
 @pytest.mark.asyncio
-async def test_accepts_valid_jpeg():
-    data = b"\xff\xd8\xff" + b"\x00" * 100
-    with patch("httpx.AsyncClient.get", return_value=_mock_http("image/jpeg", data)):
-        b64, mime = await _fetch_and_validate_image("https://example.com/ok.jpg")
-    assert mime == "image/jpeg"
-    assert base64.b64decode(b64) == data
+async def test_get_question_excludes_rubric(db_session):
+    created = await _question(db_session)
+    result = await get_question(db_session, created["id"])
+    assert "rubric" not in result
 
 
-def test_get_question_shape():
-    with patch("app.features.diagram.service.DiagramService.fetch_question",
-               new_callable=AsyncMock, return_value=_fake_question()):
-        r = client.get(f"/diagram/{Q_ID}")
-    assert r.status_code == 200
-    data = r.json()
-    assert "image_url" in data and "prompt" in data
-    assert "rubric" not in data
+@pytest.mark.asyncio
+async def test_get_question_404(db_session):
+    with pytest.raises(HTTPException) as exc:
+        await get_question(db_session, 99999)
+    assert exc.value.status_code == 404
 
 
-def test_get_question_404():
-    with patch("app.features.diagram.service.DiagramService.fetch_question",
-               new_callable=AsyncMock, return_value=None):
-        r = client.get(f"/diagram/{uuid.uuid4()}")
-    assert r.status_code == 404
+@pytest.mark.asyncio
+async def test_get_correct_label_returns_string(db_session):
+    created = await _question(db_session)
+    assert await get_correct_label(db_session, created["id"]) == "Load Balancer"
 
 
-def test_submit_answer_returns_grading():
-    with (
-        patch("app.features.diagram.service.DiagramService.submit_answer",
-              new_callable=AsyncMock, return_value=_fake_answer()),
-        patch("app.features.diagram.service.DiagramService.fetch_question",
-              new_callable=AsyncMock, return_value=_fake_question()),
+@pytest.mark.asyncio
+async def test_submit_response_persists_row(db_session):
+    created = await _question(db_session)
+    with patch(
+        "app.features.diagram.service.grade_answer",
+        new=AsyncMock(return_value={"score": 1.0, "feedback": "ok"}),
     ):
-        r = client.post(f"/diagram/{Q_ID}/answer", json={
-            "session_id": str(S_ID),
-            "answer_text": "Router in centre, three switches.",
-        })
-    assert r.status_code == 201
-    data = r.json()
-    assert 0.0 <= data["score"] <= 1.0
-    assert "dimension" in data
-    assert "grading_feedback" in data
+        result = await submit_response(
+            db_session, created["id"], "session-1", "LB", "learner-1"
+        )
+    rows = (await db_session.exec(select(DiagramResponse))).all()
+    assert result["response_id"] == rows[0].id
+    assert rows[0].answer_text == "LB"
+    assert rows[0].score == 1.0
 
 
-def test_vision_message_has_image_content_block():
-    b64 = base64.b64encode(b"fake").decode()
-    msgs = _build_vision_message("Describe.", "Rubric.", b64, "image/jpeg")
-    types = [b["type"] for b in msgs[0]["content"]]
-    assert "image_url" in types, "Image must be a vision content block, not text"
+@pytest.mark.asyncio
+async def test_submit_response_calls_grade_answer(db_session):
+    created = await _question(db_session)
+    mock = AsyncMock(return_value={"score": 1.0, "feedback": "ok"})
+    with patch("app.features.diagram.service.grade_answer", new=mock):
+        await submit_response(db_session, created["id"], "session-1", "LB")
+    mock.assert_awaited_once_with(
+        correct_label="Load Balancer", rubric="Accept LB.", answer_text="LB"
+    )
 
 
-def test_vision_image_is_data_uri():
-    b64 = base64.b64encode(b"fake").decode()
-    msgs = _build_vision_message("Describe.", "Rubric.", b64, "image/png")
-    img_block = next(b for b in msgs[0]["content"] if b["type"] == "image_url")
-    assert img_block["image_url"]["url"].startswith("data:image/png;base64,")
+class FakeLLM:
+    def __init__(self, content=None, error: Exception | None = None):
+        self.content = content
+        self.error = error
+        self.model = "fake"
+
+    async def ainvoke(self, *args, **kwargs):
+        if self.error:
+            raise self.error
+        return SimpleNamespace(content=self.content)
+
+
+@pytest.mark.asyncio
+async def test_grade_answer_returns_1_for_correct():
+    with patch(
+        "app.core.llm.get_llm_with_tracing",
+        return_value=(FakeLLM('{"score": 1, "feedback": "correct"}'), []),
+    ):
+        result = await grade_answer("Load Balancer", "Accept LB.", "Load Balancer")
+    assert result["score"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_grade_answer_returns_1_for_semantic_eq():
+    with patch(
+        "app.core.llm.get_llm_with_tracing",
+        return_value=(FakeLLM('{"score": 1, "feedback": "LB accepted"}'), []),
+    ):
+        result = await grade_answer("Load Balancer", "Accept LB.", "LB")
+    assert result["score"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_grade_answer_returns_0_for_wrong():
+    with patch(
+        "app.core.llm.get_llm_with_tracing",
+        return_value=(FakeLLM('{"score": 0, "feedback": "wrong"}'), []),
+    ):
+        result = await grade_answer("Load Balancer", "Accept LB.", "Firewall")
+    assert result["score"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_grade_answer_clamps_non_binary_score():
+    with patch(
+        "app.core.llm.get_llm_with_tracing",
+        return_value=(FakeLLM('{"score": 0.7, "feedback": "partial"}'), []),
+    ):
+        result = await grade_answer("Load Balancer", "Accept LB.", "proxy")
+    assert result["score"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_grade_answer_survives_llm_failure():
+    with patch(
+        "app.core.llm.get_llm_with_tracing",
+        return_value=(FakeLLM(error=RuntimeError("boom")), []),
+    ):
+        result = await grade_answer("Load Balancer", "Accept LB.", "LB")
+    assert result == {"score": 0.0, "feedback": "Grading unavailable"}
