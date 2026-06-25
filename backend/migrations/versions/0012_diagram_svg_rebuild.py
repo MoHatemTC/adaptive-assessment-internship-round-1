@@ -1,6 +1,6 @@
 """Rebuild diagram feature around inline SVG questions.
 
-Revision ID: 0012_rebuild_diagram_svg_unified_pattern
+Revision ID: 0012_diagram_svg_rebuild
 Revises: 0011_mcq_adaptive_columns
 Create Date: 2026-06-25
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0012_rebuild_diagram_svg_unified_pattern"
+revision: str = "0012_diagram_svg_rebuild"
 down_revision: Union[str, None] = "0011_mcq_adaptive_columns"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
