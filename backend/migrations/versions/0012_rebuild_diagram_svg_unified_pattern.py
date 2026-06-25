@@ -9,13 +9,14 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "0012_rebuild_diagram_svg_unified_pattern"
 down_revision: Union[str, None] = "0011_mcq_adaptive_columns"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_diagram_dimension = sa.Enum(
+_diagram_dimension = postgresql.ENUM(
     "thinking",
     "soft",
     "work",
@@ -23,7 +24,6 @@ _diagram_dimension = sa.Enum(
     "growth",
     name="diagram_skill_dimension",
 )
-
 
 def upgrade() -> None:
     op.drop_index("ix_diagram_answers_session_id", table_name="diagram_answers")
@@ -46,7 +46,7 @@ def upgrade() -> None:
             server_default="easy",
             nullable=False,
         ),
-        sa.Column("dimension", _diagram_dimension, nullable=True),
+        sa.Column("dimension", postgresql.ENUM("thinking", "soft", "work", "digital_ai", "growth", name="diagram_skill_dimension", create_type=False), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -92,10 +92,13 @@ def downgrade() -> None:
     op.drop_index("ix_diagram_responses_session_id", table_name="diagram_responses")
     op.drop_table("diagram_responses")
     op.drop_table("diagram_questions")
+    op.execute("DROP TYPE IF EXISTS diagram_skill_dimension")
     _diagram_dimension.drop(op.get_bind(), checkfirst=True)
 
-    difficulty_enum = sa.Enum("easy", "medium", "hard", name="difficulty")
-    skill_dimension_enum = sa.Enum(
+    op.execute("DROP TYPE IF EXISTS difficulty")
+    op.execute("DROP TYPE IF EXISTS skilldimension")
+    difficulty_enum = postgresql.ENUM("easy", "medium", "hard", name="difficulty")
+    skill_dimension_enum = postgresql.ENUM(
         "thinking", "soft", "work", "digital_ai", "growth", name="skilldimension"
     )
     difficulty_enum.create(op.get_bind(), checkfirst=True)
@@ -106,8 +109,8 @@ def downgrade() -> None:
         sa.Column("image_url", sa.String(), nullable=False),
         sa.Column("prompt", sa.Text(), nullable=False),
         sa.Column("rubric", sa.Text(), nullable=False),
-        sa.Column("difficulty", difficulty_enum, nullable=False),
-        sa.Column("dimension", skill_dimension_enum, nullable=False),
+        sa.Column("difficulty", postgresql.ENUM("easy", "medium", "hard", name="difficulty", create_type=False), nullable=False),
+        sa.Column("dimension", postgresql.ENUM("thinking", "soft", "work", "digital_ai", "growth", name="skilldimension", create_type=False), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
     )
     op.create_table(

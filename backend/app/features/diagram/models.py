@@ -30,7 +30,7 @@ class DiagramQuestion(Base):
         String(50), nullable=False, server_default="easy"
     )
     dimension: Mapped[DiagramSkillDimension | None] = mapped_column(
-        SAEnum(DiagramSkillDimension, name="diagram_skill_dimension"),
+        SAEnum(DiagramSkillDimension, name="diagram_skill_dimension", create_type=False),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
