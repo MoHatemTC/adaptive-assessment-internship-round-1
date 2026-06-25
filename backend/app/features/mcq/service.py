@@ -14,7 +14,12 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.logging import get_logger
-from app.features.mcq.models import MCQOption, MCQQuestion, MCQResponse
+from app.features.mcq.models import (
+    MCQOption,
+    MCQQuestion,
+    MCQResponse,
+    SkillDimension,
+)
 
 _logger = get_logger(__name__)
 
@@ -85,12 +90,32 @@ async def _get_question_or_404(
     return question
 
 
+def _coerce_dimension(dimension: Optional[str]) -> Optional[SkillDimension]:
+    """Convert a dimension string to a :class:`SkillDimension`, or ``None``.
+
+    Args:
+        dimension: Raw dimension value (for example ``"digital_ai"``), or ``None``.
+
+    Returns:
+        The matching :class:`SkillDimension` member, or ``None`` when the value
+        is missing or not a recognized dimension.
+    """
+    if not dimension:
+        return None
+    try:
+        return SkillDimension(dimension)
+    except ValueError:
+        _logger.warning("mcq_unknown_dimension", dimension=dimension)
+        return None
+
+
 async def create_question(
     db: AsyncSession,
     question_text: str,
     correct_option: str,
     options: List[Dict[str, str]],
     difficulty: str = "easy",
+    dimension: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create an MCQ question with its options.
 
@@ -100,6 +125,9 @@ async def create_question(
         correct_option: Identifier of the correct option (kept server-side).
         options: Option dicts, each with ``label`` and ``text`` keys.
         difficulty: Difficulty label. Defaults to ``"easy"``.
+        dimension: Optional skill dimension this question targets (one of
+            thinking/soft/work/digital_ai/growth). Read by the shared adaptation
+            agent via ``response.question.dimension.value``.
 
     Returns:
         The created question serialized without the correct answer.
@@ -108,6 +136,7 @@ async def create_question(
         question_text=question_text,
         difficulty=difficulty,
         correct_option=correct_option,
+        dimension=_coerce_dimension(dimension),
     )
     db.add(question)
 
@@ -135,6 +164,7 @@ async def create_question(
         "id": question.id,
         "question_text": question.question_text,
         "difficulty": question.difficulty,
+        "dimension": question.dimension.value if question.dimension else None,
         "options": [
             {"label": option["label"], "text": option["text"]}
             for option in options

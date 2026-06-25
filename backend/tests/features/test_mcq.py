@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -12,7 +13,14 @@ from app.core.base_tool import BaseTool
 from app.core.database import Base, async_session, engine
 from app.core.deps import get_db
 from app.features.mcq.api import router as mcq_router
-from app.features.mcq.models import MCQOption, MCQQuestion, MCQResponse
+from app.features.mcq.evaluation import evaluate_mcq_answer
+from app.features.mcq.loop import run_mcq_loop
+from app.features.mcq.models import (
+    MCQOption,
+    MCQQuestion,
+    MCQResponse,
+    SkillDimension,
+)
 from app.features.mcq.service import (
     build_submit_response,
     create_question,
@@ -228,3 +236,286 @@ def test_submit_answer_round_trip():
     assert body["question_id"] == question_id
     assert "is_correct" not in body
     assert "score" not in body
+
+
+# ---------------------------------------------------------------------------
+# Sprint 3 — adaptive loop: evaluation, loop orchestration, silent /answer
+# ---------------------------------------------------------------------------
+
+_FORBIDDEN_KEYS = {
+    "score",
+    "correct",
+    "is_correct",
+    "passed",
+    "grading_feedback",
+    "rubric_scores",
+    "memory_card",
+    "memory_summary",
+    "dimension_signals",
+}
+
+
+def _assert_no_grading_leak(obj: object) -> None:
+    """Recursively assert no grading/internal key appears anywhere in ``obj``."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            assert key not in _FORBIDDEN_KEYS, f"forbidden key leaked: {key}"
+            _assert_no_grading_leak(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            _assert_no_grading_leak(item)
+
+
+async def _make_response(
+    db: AsyncSession,
+    selected_option: str,
+    correct_option: str = "5",
+    dimension: str | None = None,
+) -> int:
+    """Create a question and an ungraded response; return the response id."""
+    question_in = await create_question(
+        db=db,
+        question_text="What is the output of print(2 + 3)?",
+        correct_option=correct_option,
+        options=SAMPLE_OPTIONS,
+        dimension=dimension,
+    )
+    response = MCQResponse(
+        question_id=question_in["id"],
+        session_id="session-eval-1",
+        selected_option=selected_option,
+        is_correct=False,
+        score=None,
+    )
+    db.add(response)
+    await db.flush()
+    return response.id
+
+
+@pytest.mark.asyncio
+async def test_evaluate_correct_answer_persists_score_1(db_session):
+    response_id = await _make_response(db_session, selected_option="5")
+
+    with patch(
+        "app.features.mcq.evaluation.run_memory_agent",
+        new=AsyncMock(return_value=(None, "summary")),
+    ):
+        await evaluate_mcq_answer(
+            session_id="session-eval-1",
+            question_index=0,
+            mcq_response_id=response_id,
+            db=db_session,
+        )
+
+    result = await db_session.exec(
+        select(MCQResponse).where(MCQResponse.id == response_id)
+    )
+    saved = result.first()
+    assert saved.score == 1.0
+    assert saved.grading_feedback is not None
+
+
+@pytest.mark.asyncio
+async def test_evaluate_wrong_answer_persists_score_0(db_session):
+    response_id = await _make_response(db_session, selected_option="2")
+
+    with patch(
+        "app.features.mcq.evaluation.run_memory_agent",
+        new=AsyncMock(return_value=(None, "summary")),
+    ):
+        await evaluate_mcq_answer(
+            session_id="session-eval-1",
+            question_index=0,
+            mcq_response_id=response_id,
+            db=db_session,
+        )
+
+    result = await db_session.exec(
+        select(MCQResponse).where(MCQResponse.id == response_id)
+    )
+    saved = result.first()
+    assert saved.score == 0.0
+
+
+@pytest.mark.asyncio
+async def test_evaluate_persists_dimension_to_question(db_session):
+    # NOTE: dimension lives on MCQQuestion (read by the shared adaptation agent
+    # via question.dimension.value), not on MCQResponse.
+    response_id = await _make_response(
+        db_session, selected_option="5", dimension="thinking"
+    )
+
+    with patch(
+        "app.features.mcq.evaluation.run_memory_agent",
+        new=AsyncMock(return_value=(None, "summary")),
+    ):
+        await evaluate_mcq_answer(
+            session_id="session-eval-1",
+            question_index=0,
+            mcq_response_id=response_id,
+            db=db_session,
+        )
+
+    resp_result = await db_session.exec(
+        select(MCQResponse).where(MCQResponse.id == response_id)
+    )
+    saved_response = resp_result.first()
+    q_result = await db_session.exec(
+        select(MCQQuestion).where(MCQQuestion.id == saved_response.question_id)
+    )
+    question = q_result.first()
+    assert question.dimension == SkillDimension.thinking
+
+
+@pytest.mark.asyncio
+async def test_evaluate_calls_memory_agent_with_correct_tool_type():
+    """Mocked-DB variant: avoids the real-Postgres ``db_session`` fixture so
+    this test cannot time out waiting on the Supabase connection. The DB layer
+    is faked with in-memory model instances and a mocked ``db.exec``; only the
+    call into ``run_memory_agent`` is asserted.
+    """
+    mcq_response = MCQResponse(
+        id=1,
+        question_id=10,
+        session_id="session-eval-1",
+        selected_option="5",
+        is_correct=False,
+        score=None,
+    )
+    question = MCQQuestion(
+        id=10,
+        question_text="What is the output of print(2 + 3)?",
+        correct_option="5",
+        difficulty="easy",
+        dimension=None,
+    )
+    options = [
+        MCQOption(id=1, question_id=10, label="2", text="2"),
+        MCQOption(id=2, question_id=10, label="3", text="3"),
+        MCQOption(id=3, question_id=10, label="5", text="5"),
+        MCQOption(id=4, question_id=10, label="23", text="23"),
+    ]
+
+    response_result = MagicMock()
+    response_result.first.return_value = mcq_response
+    question_result = MagicMock()
+    question_result.first.return_value = question
+    options_result = MagicMock()
+    options_result.all.return_value = options
+
+    db = AsyncMock()
+    db.exec = AsyncMock(side_effect=[response_result, question_result, options_result])
+    db.commit = AsyncMock()
+
+    memory_mock = AsyncMock(return_value=(None, "summary"))
+    with patch("app.features.mcq.evaluation.run_memory_agent", new=memory_mock):
+        await evaluate_mcq_answer(
+            session_id="session-eval-1",
+            question_index=0,
+            mcq_response_id=1,
+            db=db,
+        )
+
+    memory_mock.assert_awaited_once()
+    assert memory_mock.await_args.kwargs["tool_type"] == "mcq"
+
+
+@pytest.mark.asyncio
+async def test_loop_returns_complete_when_last_question():
+    eval_mock = AsyncMock(return_value={"memory_card": None, "memory_summary": ""})
+    with patch("app.features.mcq.loop.evaluate_mcq_answer", new=eval_mock):
+        result = await run_mcq_loop(
+            session_id="s1",
+            question_index=4,
+            mcq_response_id=1,
+            total_questions=5,
+            db=AsyncMock(),
+        )
+    assert result["is_complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_loop_returns_not_complete_when_more_questions_remain():
+    eval_mock = AsyncMock(return_value={"memory_card": None, "memory_summary": ""})
+    with patch("app.features.mcq.loop.evaluate_mcq_answer", new=eval_mock):
+        result = await run_mcq_loop(
+            session_id="s1",
+            question_index=0,
+            mcq_response_id=1,
+            total_questions=5,
+            db=AsyncMock(),
+        )
+    assert result["is_complete"] is False
+
+
+def test_answer_endpoint_response_never_contains_score():
+    """The adaptive /answer endpoint must never leak any grading detail."""
+    asyncio.run(reset_mcq_tables())
+
+    app = FastAPI()
+    app.include_router(mcq_router)
+    app.dependency_overrides[get_db] = _override_get_db
+
+    next_question = {
+        "id": 999,
+        "question_text": "Next question?",
+        "difficulty": "beginner",
+        "dimension": "thinking",
+        "options": [
+            {"label": "A", "text": "alpha"},
+            {"label": "B", "text": "beta"},
+        ],
+    }
+
+    loop_mock = AsyncMock(
+        return_value={
+            "is_complete": False,
+            "memory_card": None,
+            "memory_summary": "internal only",
+        }
+    )
+    gen_mock = AsyncMock(return_value=next_question)
+
+    with (
+        patch("app.features.mcq.api.run_mcq_loop", new=loop_mock),
+        patch("app.features.mcq.api.generate_and_store_next_mcq", new=gen_mock),
+        TestClient(app) as client,
+    ):
+        create_response = client.post(
+            "/mcq/questions",
+            json={
+                "question_text": "What is the output of print(2 + 3)?",
+                "difficulty": "easy",
+                "correct_option": "5",
+                "options": [
+                    {"label": "2", "text": "2"},
+                    {"label": "3", "text": "3"},
+                    {"label": "5", "text": "5"},
+                    {"label": "23", "text": "23"},
+                ],
+            },
+        )
+        assert create_response.status_code == 200
+        question_id = create_response.json()["id"]
+
+        answer_response = client.post(
+            f"/mcq/sessions/{'session-answer-1'}/answer",
+            json={
+                "question_id": question_id,
+                "selected_option": "5",
+                "question_index": 0,
+                "total_questions": 5,
+            },
+        )
+
+    assert answer_response.status_code == 200
+    body = answer_response.json()
+
+    assert body["is_complete"] is False
+    assert body["next_question"]["id"] == 999
+    # No grading detail anywhere in the payload, at any nesting level.
+    _assert_no_grading_leak(body)
+    # And specifically: options carry no answer key.
+    for option in body["next_question"]["options"]:
+        assert "is_correct" not in option
+        assert set(option.keys()) == {"label", "text"}

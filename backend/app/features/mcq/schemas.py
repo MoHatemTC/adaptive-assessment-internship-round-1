@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -41,3 +41,59 @@ class MCQSubmitResponse(BaseModel):
 
     received: bool = True
     question_id: int
+
+
+class MCQAnswerRequest(BaseModel):
+    """Request body for the adaptive MCQ answer endpoint.
+
+    ``selected_option`` is the option *label* (for example ``"A"``), matching how
+    options are stored and served — there is no numeric option id in this schema.
+    """
+
+    question_id: int
+    selected_option: str = Field(..., description="The selected option label, e.g. 'A'")
+    question_index: int = Field(..., ge=0)
+    total_questions: int = Field(default=5, ge=1)
+    learner_id: Optional[str] = None
+    learner_profile: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional learner context for question generation"
+    )
+    admin_config: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional admin/blueprint config for generation"
+    )
+
+
+class MCQNextOption(BaseModel):
+    """A learner-safe option for the next question — label and text only.
+
+    Deliberately omits ``is_correct`` so the answer is never leaked.
+    """
+
+    label: str
+    text: str
+
+
+class MCQNextQuestion(BaseModel):
+    """The next question to present, with no grading detail.
+
+    ``dimension`` is the question's *target* skill category (not a score) and
+    ``difficulty`` is the tier — neither is a grading result.
+    """
+
+    id: int
+    question_text: str
+    difficulty: str
+    dimension: Optional[str] = None
+    options: List[MCQNextOption]
+
+
+class MCQAnswerResponse(BaseModel):
+    """Learner-safe response for the adaptive answer endpoint.
+
+    Carries only the next question (if any) and a completion flag. It never
+    contains score, correctness, pass/fail, grading feedback, dimension scores,
+    or memory card contents.
+    """
+
+    next_question: Optional[MCQNextQuestion] = None
+    is_complete: bool

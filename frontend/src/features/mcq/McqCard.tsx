@@ -2,16 +2,16 @@
 
 import { useState } from "react";
 
-interface McqOption {
-  id: string;
+export interface McqOption {
   label: string;
+  text: string;
 }
 
 interface McqCardProps {
-  questionId: string;
+  questionId: number;
   questionText: string;
   options: McqOption[];
-  onSubmit: (questionId: string, selectedOptionId: string) => void;
+  onSubmit: (questionId: number, selectedLabel: string) => void;
   isSubmitting: boolean;
 }
 
@@ -19,8 +19,9 @@ interface McqCardProps {
  * Presentational card that renders a single MCQ question.
  *
  * The component is fully controlled by its parent: it tracks only the locally
- * selected option and delegates submission via `onSubmit`. Grading is silent —
- * the card never displays correctness or score.
+ * selected option label and delegates submission via `onSubmit`. Grading is
+ * silent — the card never displays correctness or score, and the options carry
+ * no answer key.
  */
 export default function McqCard({
   questionId,
@@ -29,13 +30,13 @@ export default function McqCard({
   onSubmit,
   isSubmitting,
 }: McqCardProps) {
-  const [selectedOptionId, setSelectedOptionId] = useState<string>("");
+  const [selectedLabel, setSelectedLabel] = useState<string>("");
 
   const handleSubmit = () => {
-    if (!selectedOptionId || isSubmitting) {
+    if (!selectedLabel || isSubmitting) {
       return;
     }
-    onSubmit(questionId, selectedOptionId);
+    onSubmit(questionId, selectedLabel);
   };
 
   return (
@@ -46,11 +47,11 @@ export default function McqCard({
 
       <div className="space-y-3">
         {options.map((option) => {
-          const isSelected = selectedOptionId === option.id;
+          const isSelected = selectedLabel === option.label;
 
           return (
             <label
-              key={option.id}
+              key={option.label}
               className={`flex cursor-pointer items-center gap-3 rounded-[24px] border p-4 transition ${
                 isSelected
                   ? "border-[#004EFF] bg-[#E6EEFF]"
@@ -60,15 +61,19 @@ export default function McqCard({
               <input
                 type="radio"
                 name={`mcq-${questionId}`}
-                value={option.id}
+                value={option.label}
                 checked={isSelected}
-                onChange={() => setSelectedOptionId(option.id)}
+                onChange={() => setSelectedLabel(option.label)}
                 disabled={isSubmitting}
                 className="h-4 w-4 accent-[#004EFF]"
               />
 
               <span className="text-sm font-semibold leading-[18px] text-[#343434]">
-                {option.label}
+                {option.label}.
+              </span>
+
+              <span className="text-sm leading-[18px] text-[#343434]">
+                {option.text}
               </span>
             </label>
           );
@@ -78,7 +83,7 @@ export default function McqCard({
       <button
         type="button"
         onClick={handleSubmit}
-        disabled={isSubmitting || !selectedOptionId}
+        disabled={isSubmitting || !selectedLabel}
         className="mt-6 h-[43px] rounded-lg bg-[#004EFF] px-6 py-3 text-sm font-semibold text-[#FBFBFD] transition hover:bg-[#3374FF] disabled:cursor-not-allowed disabled:opacity-60"
       >
         {isSubmitting ? "Submitting..." : "Submit Answer"}
