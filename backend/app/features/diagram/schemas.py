@@ -1,47 +1,49 @@
-"""
-schemas.py — Pydantic v2 request/response models for the diagram feature.
-
-DiagramQuestionResponse : what GET /diagram/{id} returns to the frontend
-                          includes the served image URL (not a raw path)
-DiagramAnswerRequest    : body for POST /diagram/{id}/answer
-DiagramAnswerResponse   : what the submit route returns to the agent
-                          — structured grading result, never shown to learner
-"""
-
-import uuid
-from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 
-from app.features.diagram.models import Difficulty, SkillDimension
+
+class DiagramCreateRequest(BaseModel):
+    svg_content: str
+    prompt: str
+    correct_label: str
+    rubric: str
+    difficulty: str = "easy"
+    dimension: Optional[str] = None
 
 
 class DiagramQuestionResponse(BaseModel):
-    id:         uuid.UUID
-    image_url:  str
-    prompt:     str
-    difficulty: Difficulty
-    dimension:  SkillDimension
+    """Learner-safe question shape. correct_label and rubric are intentionally absent."""
 
-    model_config = {"from_attributes": True}
+    id: int
+    svg_content: str
+    prompt: str
+    difficulty: str
+    dimension: Optional[str] = None
 
 
 class DiagramAnswerRequest(BaseModel):
-    session_id:  uuid.UUID = Field(..., description="Blueprint session tracking ID")
-    answer_text: str       = Field(..., min_length=1, max_length=4000)
+    question_id: int
+    answer_text: str = Field(..., min_length=1, max_length=500)
+    question_index: int = Field(..., ge=0)
+    total_questions: int = Field(default=5, ge=1)
+    learner_id: Optional[str] = None
+    learner_profile: Optional[dict] = None
+    admin_config: Optional[dict] = None
+
+
+class DiagramNextQuestion(BaseModel):
+    """Next question — same learner-safe shape as DiagramQuestionResponse."""
+
+    id: int
+    svg_content: str
+    prompt: str
+    difficulty: str
+    dimension: Optional[str] = None
 
 
 class DiagramAnswerResponse(BaseModel):
-    """
-    Structured grading result returned to the agent.
-    Score and feedback are silent — not forwarded to the learner mid-session.
-    The agent uses `score` and `dimension` to select the next question difficulty.
-    """
-    answer_id:        uuid.UUID
-    session_id:       uuid.UUID
-    question_id:      uuid.UUID
-    score:            float
-    dimension:        SkillDimension
-    grading_feedback: str
-    graded_at:        datetime
+    """Learner-safe response. Never includes score, feedback, or correct_label."""
+
+    next_question: Optional[DiagramNextQuestion] = None
+    is_complete: bool

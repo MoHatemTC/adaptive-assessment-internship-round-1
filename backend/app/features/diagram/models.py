@@ -1,71 +1,67 @@
-"""
-models.py — SQLAlchemy ORM models for the diagram feature.
+"""SQLAlchemy 2.0 ORM models for the diagram feature."""
 
-DiagramQuestion  : the item delivered to the learner
-                   (image_url, prompt, rubric, difficulty)
-DiagramAnswer    : the learner's text response, persisted per session
-                   queryable by session_id (blueprint requirement)
-
-Difficulty enum matches the blueprint's "difficulty progression" language.
-Five skill dimensions (Thinking/Soft/Work/Digital/Growth) are stored on
-the answer so the aggregation step can map results without a join.
-"""
-
-import uuid
 import enum
 from datetime import datetime
 
-from sqlalchemy import (
-    Column, String, Text, Float, Integer,
-    ForeignKey, DateTime, Enum as SAEnum,
-)
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
-from app.core.database import Base
+from app.core.database import Base, Mapped, mapped_column
 
 
-class Difficulty(str, enum.Enum):
-    easy   = "easy"
-    medium = "medium"
-    hard   = "hard"
-
-
-class SkillDimension(str, enum.Enum):
-    """Five dimensions from the project spec."""
-    thinking   = "thinking"
-    soft       = "soft"
-    work       = "work"
+class DiagramSkillDimension(str, enum.Enum):
+    thinking = "thinking"
+    soft = "soft"
+    work = "work"
     digital_ai = "digital_ai"
-    growth     = "growth"
+    growth = "growth"
 
 
 class DiagramQuestion(Base):
     __tablename__ = "diagram_questions"
 
-    id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    image_url  = Column(String, nullable=False)
-    prompt     = Column(Text, nullable=False)
-    rubric     = Column(Text, nullable=False)
-    difficulty = Column(SAEnum(Difficulty), nullable=False)
-    dimension  = Column(SAEnum(SkillDimension), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    svg_content: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    correct_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    rubric: Mapped[str] = mapped_column(Text, nullable=False)
+    difficulty: Mapped[str] = mapped_column(
+        String(50), nullable=False, server_default="easy"
+    )
+    dimension: Mapped[DiagramSkillDimension | None] = mapped_column(
+        SAEnum(DiagramSkillDimension, name="diagram_skill_dimension"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
-    answers    = relationship("DiagramAnswer", back_populates="question")
 
+class DiagramResponse(Base):
+    __tablename__ = "diagram_responses"
 
-class DiagramAnswer(Base):
-    __tablename__ = "diagram_answers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("diagram_questions.id"), nullable=False
+    )
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    learner_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    answer_text: Mapped[str] = mapped_column(Text, nullable=False)
+    score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        comment="1.0 = correct, 0.0 = wrong. Never exposed to learner.",
+    )
+    grading_feedback: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Server-side only. Never exposed to learner.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
-    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
-    question_id = Column(UUID(as_uuid=True), ForeignKey("diagram_questions.id"), nullable=False)
-    answer_text = Column(Text, nullable=False)
-
-    score           = Column(Float, nullable=True)
-    grading_feedback = Column(Text, nullable=True)
-    graded_at       = Column(DateTime, nullable=True)
-
-    submitted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    question = relationship("DiagramQuestion", back_populates="answers")
+    question: Mapped["DiagramQuestion"] = relationship(
+        "DiagramQuestion", lazy="selectin"
+    )

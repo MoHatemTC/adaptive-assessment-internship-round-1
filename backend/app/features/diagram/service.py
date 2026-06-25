@@ -1,194 +1,223 @@
-"""
-service.py — business logic for the diagram feature.
+"""Diagram persistence and silent LLM grading logic."""
 
-Two responsibilities:
-  1. fetch_question  : retrieve a DiagramQuestion and return a served image URL
-  2. submit_answer   : persist DiagramAnswer, call LiteLLM vision to grade,
-                       update the record, return structured result
+from __future__ import annotations
 
-Image validation (type + size guards) lives here so both the API route
-and the LangChain tool share the same checks.
+import json
+from typing import Any, Dict, List, Optional
 
-Grading routes through :func:`app.core.llm.get_llm_with_tracing` with the image
-attached as a vision content block — NOT described as text.
-Langfuse tracing and retry policy are provided by the kernel LLM gateway.
-"""
+from fastapi import HTTPException, status
+from langchain_core.messages import HumanMessage, SystemMessage
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-import uuid
-import base64
-import mimetypes
-import time
-from datetime import datetime, timezone
-from typing import Optional
-
-import httpx
-from langchain_core.messages import HumanMessage
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
-from app.core.llm import get_llm_with_tracing
-from app.core.llm_json import parse_llm_json, prefers_raw_json_model, resolve_vision_model
+from app.core import llm as llm_gateway
 from app.core.logging import get_logger
-from app.core.metrics import record_llm_call
-from app.features.diagram.models import DiagramQuestion, DiagramAnswer, SkillDimension
+from app.features.diagram.models import (
+    DiagramQuestion,
+    DiagramResponse,
+    DiagramSkillDimension,
+)
 
 _logger = get_logger(__name__)
 
 
-ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-MAX_IMAGE_BYTES    = 5 * 1024 * 1024
+def _extract_json_from_llm_response(content: Any) -> Dict[str, Any]:
+    """Parse a JSON object out of an LLM response.
 
+    Handles Kimi K2's list-of-blocks content shape and stray code fences.
 
-def _guess_mime(url: str) -> Optional[str]:
-    mime, _ = mimetypes.guess_type(url)
-    return mime
+    Args:
+        content: The ``response.content`` returned by the LLM.
 
+    Returns:
+        The parsed JSON object as a dict.
 
-async def _fetch_and_validate_image(image_url: str) -> tuple[str, str]:
+    Raises:
+        ValueError: If no JSON object can be located in the response.
     """
-    Download the image, check MIME type and size.
-    Returns (base64_data, mime_type) ready for a vision content block.
-    Raises ValueError on type/size violations.
-    """
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(image_url)
-        resp.raise_for_status()
+    if isinstance(content, list):
+        text_parts: List[str] = []
 
-    content_type = resp.headers.get("content-type", "").split(";")[0].strip()
-    if not content_type:
-        content_type = _guess_mime(image_url) or ""
+        for block in content:
+            if isinstance(block, dict):
+                block_type = block.get("type")
 
-    if content_type not in ALLOWED_MIME_TYPES:
-        raise ValueError(f"Unsupported image type: {content_type!r}. Allowed: {ALLOWED_MIME_TYPES}")
+                if block_type == "text" and block.get("text"):
+                    text_parts.append(str(block["text"]))
+                elif block_type not in {"thinking", "reasoning"}:
+                    possible_text = block.get("text") or block.get("content") or ""
+                    if possible_text:
+                        text_parts.append(str(possible_text))
+            else:
+                text_parts.append(str(block))
 
-    raw = resp.content
-    if len(raw) > MAX_IMAGE_BYTES:
-        raise ValueError(
-            f"Image too large: {len(raw)} bytes (max {MAX_IMAGE_BYTES})"
+        cleaned = "\n".join(text_parts).strip()
+    else:
+        cleaned = str(content).strip()
+
+    if cleaned.startswith("```json"):
+        cleaned = cleaned.removeprefix("```json").strip()
+
+    if cleaned.startswith("```"):
+        cleaned = cleaned.removeprefix("```").strip()
+
+    if cleaned.endswith("```"):
+        cleaned = cleaned.removesuffix("```").strip()
+
+    start_index = cleaned.find("{")
+    end_index = cleaned.rfind("}")
+
+    if start_index == -1 or end_index == -1:
+        raise ValueError("LLM response does not contain a valid JSON object")
+
+    json_text = cleaned[start_index : end_index + 1]
+    return json.loads(json_text)
+
+
+def _serialize_question(question: DiagramQuestion) -> dict:
+    return {
+        "id": question.id,
+        "svg_content": question.svg_content,
+        "prompt": question.prompt,
+        "difficulty": question.difficulty,
+        "dimension": question.dimension.value if question.dimension else None,
+    }
+
+
+def _coerce_dimension(dimension: Optional[str]) -> Optional[DiagramSkillDimension]:
+    if not dimension:
+        return None
+    try:
+        return DiagramSkillDimension(dimension)
+    except ValueError:
+        _logger.warning("diagram_unknown_dimension", dimension=dimension)
+        return None
+
+
+async def _get_question_or_404(db: AsyncSession, question_id: int) -> DiagramQuestion:
+    result = await db.exec(select(DiagramQuestion).where(DiagramQuestion.id == question_id))
+    question = result.first()
+    if question is None:
+        _logger.warning("diagram_question_not_found", question_id=question_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Diagram question not found",
         )
+    return question
 
-    return base64.b64encode(raw).decode("ascii"), content_type
+
+async def create_question(
+    db: AsyncSession,
+    svg_content: str,
+    prompt: str,
+    correct_label: str,
+    rubric: str,
+    difficulty: str = "easy",
+    dimension: Optional[str] = None,
+) -> dict:
+    question = DiagramQuestion(
+        svg_content=svg_content,
+        prompt=prompt,
+        correct_label=correct_label,
+        rubric=rubric,
+        difficulty=difficulty,
+        dimension=_coerce_dimension(dimension),
+    )
+    db.add(question)
+    await db.flush()
+
+    _logger.info(
+        "diagram_question_created",
+        question_id=question.id,
+        difficulty=difficulty,
+        dimension=dimension,
+    )
+    return _serialize_question(question)
 
 
-def _build_vision_message(prompt: str, rubric: str, b64_data: str, mime_type: str) -> list[dict]:
-    """
-    Build the messages list with the image as a base64 vision content block.
-    This is the correct format — NOT a text description of the image.
-    """
-    return [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{mime_type};base64,{b64_data}"
-                    },
-                },
-                {
-                    "type": "text",
-                    "text": (
-                        f"You are a silent LLM grader. Evaluate the learner's answer "
-                        f"against the rubric. Return ONLY valid JSON with keys: "
-                        f"score (float 0.0-1.0), feedback (string).\n\n"
-                        f"Rubric:\n{rubric}\n\n"
-                        f"Learner answer:\n{prompt}"
-                    ),
-                },
+async def get_question(db: AsyncSession, question_id: int) -> dict:
+    question = await _get_question_or_404(db, question_id)
+    return _serialize_question(question)
+
+
+async def get_correct_label(db: AsyncSession, question_id: int) -> str:
+    question = await _get_question_or_404(db, question_id)
+    return question.correct_label
+
+
+async def submit_response(
+    db: AsyncSession,
+    question_id: int,
+    session_id: str,
+    answer_text: str,
+    learner_id: Optional[str] = None,
+) -> dict:
+    question = await _get_question_or_404(db, question_id)
+    response = DiagramResponse(
+        question_id=question_id,
+        session_id=session_id,
+        answer_text=answer_text,
+        learner_id=learner_id,
+        score=None,
+        grading_feedback=None,
+    )
+    db.add(response)
+    await db.flush()
+
+    grading = await grade_answer(
+        correct_label=question.correct_label,
+        rubric=question.rubric,
+        answer_text=answer_text,
+    )
+    response.score = grading["score"]
+    response.grading_feedback = grading["feedback"]
+    await db.flush()
+
+    _logger.info(
+        "diagram_answer_graded",
+        response_id=response.id,
+        session_id=session_id,
+        score=response.score,
+    )
+    return {
+        "question_id": response.question_id,
+        "response_id": response.id,
+        "score": response.score,
+        "grading_feedback": response.grading_feedback,
+    }
+
+
+async def grade_answer(correct_label: str, rubric: str, answer_text: str) -> dict:
+    system_prompt = f"""
+You are a silent diagram assessment grader.
+The learner was shown an architecture/system diagram with one component label
+left blank. They must identify what that blank component is.
+
+Correct label: {correct_label}
+Grading context: {rubric}
+
+Rules:
+- Accept semantically equivalent answers (e.g. "load balancer" = "Load Balancer" = "LB").
+- Accept partial matches if the core concept is correct.
+- Reject answers that are clearly wrong or name a completely different component.
+- Return ONLY valid JSON, no preamble, no markdown: {{"score": 1, "feedback": "string"}}
+  where score is exactly 1 (correct) or 0 (wrong).
+""".strip()
+
+    try:
+        llm, callbacks = llm_gateway.get_llm_with_tracing()
+        response = await llm.ainvoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=f"Learner's answer: {answer_text}"),
             ],
-        }
-    ]
-
-
-class DiagramService:
-
-    async def fetch_question(
-        self,
-        db: AsyncSession,
-        question_id: uuid.UUID,
-    ) -> Optional[DiagramQuestion]:
-        """
-        Retrieve a DiagramQuestion by ID.
-        The image_url stored is already a served/signed URL (set at creation time).
-        """
-        result = await db.execute(
-            select(DiagramQuestion).where(DiagramQuestion.id == question_id)
+            config={"callbacks": callbacks},
         )
-        return result.scalar_one_or_none()
-
-    async def submit_answer(
-        self,
-        db: AsyncSession,
-        question_id: uuid.UUID,
-        session_id: uuid.UUID,
-        answer_text: str,
-    ) -> DiagramAnswer:
-        """
-        1. Persist the answer record immediately (score=None until graded).
-        2. Fetch + validate the image (type + size guards).
-        3. Call LiteLLM vision model with image as content block.
-        4. Parse structured grading result, update record.
-        5. Return the populated DiagramAnswer.
-
-        Grading is done inline here; move to a Celery task if async grading
-        is required by the performance SLA (<10 s async grading requirement).
-        """
-
-        question = await self.fetch_question(db, question_id)
-        if question is None:
-            raise ValueError(f"DiagramQuestion {question_id} not found")
-
-        answer = DiagramAnswer(
-            session_id=session_id,
-            question_id=question_id,
-            answer_text=answer_text,
-        )
-        db.add(answer)
-        await db.flush()
-
-        try:
-            b64_data, mime_type = await _fetch_and_validate_image(question.image_url)
-        except Exception as exc:
-            _logger.error("diagram_image_validation_failed", error=str(exc), answer_id=str(answer.id))
-            raise
-
-
-        messages = _build_vision_message(
-            prompt=answer_text,
-            rubric=question.rubric,
-            b64_data=b64_data,
-            mime_type=mime_type,
-        )
-
-        vision_model = resolve_vision_model()
-        llm, callbacks = get_llm_with_tracing(vision_model)
-        bound = llm.bind(max_tokens=512)
-        if not prefers_raw_json_model(vision_model):
-            bound = bound.bind(response_format={"type": "json_object"})
-
-        start = time.perf_counter()
-        try:
-            response = await bound.ainvoke(
-                [HumanMessage(content=messages[0]["content"])],
-                config={"callbacks": callbacks},
-            )
-            grading = parse_llm_json(response.content)
-            record_llm_call(vision_model, "diagram", "success", time.perf_counter() - start)
-        except Exception:
-            record_llm_call(vision_model, "diagram", "error", time.perf_counter() - start)
-            raise
-
-        answer.score            = float(grading.get("score", 0.0))
-        answer.grading_feedback = grading.get("feedback", "")
-        answer.graded_at        = datetime.now(timezone.utc)
-
-        db.add(answer)
-        await db.flush()
-
-        _logger.info(
-            "diagram_answer_graded",
-            answer_id=str(answer.id),
-            session_id=str(session_id),
-            score=answer.score,
-        )
-        return answer
+        parsed = _extract_json_from_llm_response(response.content)
+        score = float(parsed.get("score", 0))
+        if score not in {0.0, 1.0}:
+            score = 0.0
+        return {"score": score, "feedback": parsed.get("feedback", "")}
+    except Exception as exc:  # noqa: BLE001 - grading must not break session
+        _logger.error("diagram_grading_failed", error=str(exc))
+        return {"score": 0.0, "feedback": "Grading unavailable"}
