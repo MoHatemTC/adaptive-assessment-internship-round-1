@@ -24,6 +24,7 @@ from app.shared.schemas.proctoring import CameraAnalyzeRequest
 def test_violations_from_clean_frame():
     analysis = CameraAnalysisResult(
         face_visible=True,
+        person_count=1,
         face_count=1,
         camera_obstructed=False,
         looking_at_screen=True,
@@ -33,10 +34,11 @@ def test_violations_from_clean_frame():
     assert violations_from_analysis(analysis, has_reference=True, match_threshold=0.7) == []
 
 
-def test_violations_from_face_absent():
+def test_violations_from_face_absent_when_person_present_but_not_visible():
     analysis = CameraAnalysisResult(
         face_visible=False,
-        face_count=0,
+        person_count=1,
+        face_count=1,
         camera_obstructed=False,
         looking_at_screen=False,
         identity_match_score=None,
@@ -46,9 +48,10 @@ def test_violations_from_face_absent():
     assert any(v.event_type == "face_absent" for v in violations)
 
 
-def test_violations_from_multiple_faces_and_mismatch():
+def test_violations_from_multiple_persons_and_mismatch():
     analysis = CameraAnalysisResult(
         face_visible=True,
+        person_count=2,
         face_count=2,
         camera_obstructed=False,
         looking_at_screen=True,
@@ -57,7 +60,7 @@ def test_violations_from_multiple_faces_and_mismatch():
     )
     violations = violations_from_analysis(analysis, has_reference=True, match_threshold=0.7)
     types = {v.event_type for v in violations}
-    assert "multiple_faces" in types
+    assert "multiple_persons_detected" in types
     assert "identity_mismatch" in types
 
 
@@ -92,6 +95,7 @@ async def test_analyze_camera_records_violations():
 
         analysis = CameraAnalysisResult(
             face_visible=False,
+            person_count=0,
             face_count=0,
             camera_obstructed=True,
             looking_at_screen=False,

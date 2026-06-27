@@ -170,7 +170,7 @@ async def test_get_policy_via_api(proctoring_client):
                 "proctoring": {
                     "enabled_checks": ["tab_switch", "paste", "audio_absent"],
                     "event_cooldown_seconds": 15,
-                    "camera_poll_interval_seconds": 25,
+                    "camera_poll_interval_seconds": 1.5,
                 }
             },
         )
@@ -182,7 +182,7 @@ async def test_get_policy_via_api(proctoring_client):
         assert body["session_id"] == session_id
         assert "tab_switch" in body["enabled_checks"]
         assert body["event_cooldown_seconds"] == 15
-        assert body["camera_poll_interval_seconds"] == 25
+        assert body["camera_poll_interval_seconds"] == 1.5
     finally:
         await engine.dispose()
 

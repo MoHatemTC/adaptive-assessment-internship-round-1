@@ -22,7 +22,11 @@ from app.proctoring.events_catalog import (
 from app.proctoring.identity import FaceMatchProvider, IdentityUnavailableError
 from app.proctoring.models import ProctoringEvent
 from app.proctoring.settings import get_proctoring_settings
-from app.proctoring.vlm_face import analyze_camera_frame
+from app.proctoring.vlm_face import (
+    analyze_camera_frame,
+    apply_candidate_absence_grace,
+    clear_session_camera_state,
+)
 from app.sessions.models import AssessmentSession
 from app.shared.schemas.proctoring import (
     AudioAnalyzeRequest,
@@ -129,7 +133,7 @@ async def resolve_policy(db: AsyncSession, session: AssessmentSession) -> Procto
     assessment = await db.get(Assessment, session.assessment_id)
     threshold: int | None = None
     enabled_checks: list[str] | None = None
-    camera_poll_interval_seconds = 20
+    camera_poll_interval_seconds = 1.5
     event_cooldown_seconds = 30
     require_camera = True
     require_microphone = False
@@ -147,8 +151,8 @@ async def resolve_policy(db: AsyncSession, session: AssessmentSession) -> Procto
             enabled_checks = [str(item) for item in raw_checks]
 
         raw_poll = cfg.get("camera_poll_interval_seconds")
-        if isinstance(raw_poll, int) and 5 <= raw_poll <= 120:
-            camera_poll_interval_seconds = raw_poll
+        if isinstance(raw_poll, (int, float)) and 1.0 <= float(raw_poll) <= 2.0:
+            camera_poll_interval_seconds = float(raw_poll)
 
         raw_cooldown = cfg.get("event_cooldown_seconds")
         if isinstance(raw_cooldown, int) and 0 <= raw_cooldown <= 300:
@@ -326,6 +330,7 @@ async def stop_proctoring_session(db: AsyncSession, session_id: str) -> None:
         session=session,
         event_type="session_stopped",
     )
+    clear_session_camera_state(session_id)
 
 
 async def _prepare_client_event(
@@ -686,12 +691,21 @@ async def analyze_camera(
             detail=str(exc),
         ) from exc
 
+    absence_violation = apply_candidate_absence_grace(
+        session.id,
+        analysis,
+        grace_seconds=settings.PROCTORING_CANDIDATE_ABSENCE_GRACE_SECONDS,
+    )
+    if absence_violation is not None:
+        violations = [*violations, absence_violation]
+
     policy = await resolve_policy(db, session)
     recorded: list[ProctoringEventRead] = []
 
     for violation in violations:
         metadata: dict[str, Any] = {
             "description": violation.description,
+            "person_count": analysis.person_count,
             "face_count": analysis.face_count,
             "face_visible": analysis.face_visible,
         }
@@ -726,6 +740,7 @@ async def analyze_camera(
     return CameraAnalyzeResponse(
         compliant=len(violations) == 0,
         face_visible=analysis.face_visible,
+        person_count=analysis.person_count,
         face_count=analysis.face_count,
         identity_match_score=analysis.identity_match_score,
         violations=violation_reads,

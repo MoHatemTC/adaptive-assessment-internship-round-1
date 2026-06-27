@@ -19,6 +19,11 @@ const IDLE_MS = 120_000;
 const AUDIO_POLL_MS = 5_000;
 const INTEGRITY_POLL_MS = 30_000;
 const DEVTOOLS_THRESHOLD = 160;
+/** Camera VLM cadence ceiling (WP-4): default 1.5s, max 2s. */
+const CAMERA_POLL_MS = Math.min(
+  2000,
+  Number(process.env.NEXT_PUBLIC_PROCTORING_CAMERA_INTERVAL_MS ?? 1500),
+);
 
 export interface UseProctoringOptions {
   sessionId: string;
@@ -77,6 +82,7 @@ export function useProctoring({
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const lastActivityRef = useRef(Date.now());
   const flaggedRef = useRef(false);
+  const isAnalyzingCameraRef = useRef(false);
 
   policyRef.current = policy;
 
@@ -272,13 +278,17 @@ export function useProctoring({
         videoRef.current = video;
         setState((prev) => ({ ...prev, cameraReady: true }));
 
-        const pollMs = policy.camera_poll_interval_seconds * 1000;
+        const policyPollMs = policy.camera_poll_interval_seconds * 1000;
+        const pollMs = Math.min(CAMERA_POLL_MS, policyPollMs);
         cameraTimer = window.setInterval(() => {
+          if (isAnalyzingCameraRef.current) return;
+
           const frame = videoRef.current
             ? captureVideoFrame(videoRef.current)
             : null;
           if (!frame) return;
 
+          isAnalyzingCameraRef.current = true;
           void analyzeCameraFrame({
             session_id: sessionId,
             frame_b64: frame,
@@ -302,6 +312,9 @@ export function useProctoring({
             })
             .catch(() => {
               void reportEvent("camera_disabled", { source: "analyze-camera" });
+            })
+            .finally(() => {
+              isAnalyzingCameraRef.current = false;
             });
         }, pollMs);
       } catch {
