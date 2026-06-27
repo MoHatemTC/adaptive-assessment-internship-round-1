@@ -1,7 +1,7 @@
 """Rebuild diagram feature around inline SVG questions.
 
-Revision ID: 0012_diagram_svg_rebuild
-Revises: 0011_mcq_adaptive_columns
+Revision ID: 0013_diagram_svg_rebuild
+Revises: 0012_examiner_state_column
 Create Date: 2026-06-25
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0012_diagram_svg_rebuild"
-down_revision: Union[str, None] = "0011_mcq_adaptive_columns"
+revision: str = "0013_diagram_svg_rebuild"
+down_revision: Union[str, None] = "0012_examiner_state_column"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -24,6 +24,7 @@ _diagram_dimension = postgresql.ENUM(
     "growth",
     name="diagram_skill_dimension",
 )
+
 
 def upgrade() -> None:
     op.drop_index("ix_diagram_answers_session_id", table_name="diagram_answers")
@@ -46,7 +47,19 @@ def upgrade() -> None:
             server_default="easy",
             nullable=False,
         ),
-        sa.Column("dimension", postgresql.ENUM("thinking", "soft", "work", "digital_ai", "growth", name="diagram_skill_dimension", create_type=False), nullable=True),
+        sa.Column(
+            "dimension",
+            postgresql.ENUM(
+                "thinking",
+                "soft",
+                "work",
+                "digital_ai",
+                "growth",
+                name="diagram_skill_dimension",
+                create_type=False,
+            ),
+            nullable=True,
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -109,8 +122,19 @@ def downgrade() -> None:
         sa.Column("image_url", sa.String(), nullable=False),
         sa.Column("prompt", sa.Text(), nullable=False),
         sa.Column("rubric", sa.Text(), nullable=False),
-        sa.Column("difficulty", postgresql.ENUM("easy", "medium", "hard", name="difficulty", create_type=False), nullable=False),
-        sa.Column("dimension", postgresql.ENUM("thinking", "soft", "work", "digital_ai", "growth", name="skilldimension", create_type=False), nullable=False),
+        sa.Column(
+            "difficulty",
+            postgresql.ENUM("easy", "medium", "hard", name="difficulty", create_type=False),
+            nullable=False,
+        ),
+        sa.Column(
+            "dimension",
+            postgresql.ENUM(
+                "thinking", "soft", "work", "digital_ai", "growth",
+                name="skilldimension", create_type=False,
+            ),
+            nullable=False,
+        ),
         sa.Column("created_at", sa.DateTime(), nullable=False),
     )
     op.create_table(

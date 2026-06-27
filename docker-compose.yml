@@ -41,9 +41,9 @@ services:
   frontend:
     build: ./frontend
     environment:
-      # Browser calls same-origin /api (nginx or Next rewrites). Do not point at :8000.
+      # Browser must call localhost; backend:8000 only works inside Docker network.
       NEXT_PUBLIC_API_BASE_URL: ""
-      NEXT_PUBLIC_API_URL: http://backend:8000
+      NEXT_PUBLIC_API_URL: http://localhost:8000
       BACKEND_URL: http://backend:8000
     ports:
       - "3000:3000"
