@@ -57,7 +57,9 @@ async def test_retrieve_returns_hits_from_qdrant():
     }
 
     mock_client = AsyncMock()
-    mock_client.search = AsyncMock(return_value=[point])
+    mock_response = MagicMock()
+    mock_response.points = [point]
+    mock_client.query_points = AsyncMock(return_value=mock_response)
 
     with (
         patch("app.shared.memory_retrieval.get_settings") as mock_settings,
@@ -76,7 +78,7 @@ async def test_retrieve_returns_hits_from_qdrant():
 
     assert len(hits) == 1
     assert hits[0].evidence_summary == "Strong system design reasoning."
-    mock_client.search.assert_awaited_once()
+    mock_client.query_points.assert_awaited_once()
 
 
 @pytest.mark.asyncio

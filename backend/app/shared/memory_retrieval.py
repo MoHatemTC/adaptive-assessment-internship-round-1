@@ -73,13 +73,14 @@ async def retrieve_relevant_memories(
             )
 
         client = get_qdrant_client()
-        results = await client.search(
+        response = await client.query_points(
             collection_name=settings.QDRANT_COLLECTION,
-            query_vector=vector,
+            query=vector,
             query_filter=Filter(must=conditions),
             limit=limit,
             with_payload=True,
         )
+        results = response.points or []
 
         hits: list[RetrievedMemory] = []
         for point in results:
