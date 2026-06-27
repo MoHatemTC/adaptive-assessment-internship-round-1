@@ -29,7 +29,7 @@ from app.core.database import check_db_connection
 from app.core.limiter import limiter
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import setup_middleware
-from app.shared.qdrant import ensure_collections_exist
+from app.shared.qdrant import bootstrap_qdrant, check_qdrant_connection, is_qdrant_configured
 
 _logger = get_logger(__name__)
 
@@ -117,13 +117,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     _logger.info("app_startup_started")
     await setup_checkpointer()
-    try:
-        await ensure_collections_exist()
-    except Exception:
-        _logger.warning(
-            "qdrant_startup_failed",
-            reason="Qdrant unavailable at startup — continuing without it",
-        )
+    app.state.qdrant_ok = await bootstrap_qdrant()
     try:
         from app.shared.embedder import get_embedding_model
 
@@ -163,14 +157,20 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     @app.get("/health")
-    async def health() -> dict[str, str | bool]:
-        """Report service health, including database connectivity.
+    async def health() -> dict[str, str | bool | None]:
+        """Report service health, including database and Qdrant connectivity.
 
         Returns:
-            A mapping with ``status`` and a boolean ``db`` reachability flag.
+            A mapping with ``status``, ``db``, and ``qdrant``. ``qdrant`` is
+            ``null`` when ``QDRANT_URL`` is unset (memory features disabled),
+            otherwise a boolean reachability flag.
         """
         db_ok = await check_db_connection()
-        return {"status": "ok", "db": db_ok}
+        if not is_qdrant_configured():
+            qdrant_ok: bool | None = None
+        else:
+            qdrant_ok = await check_qdrant_connection()
+        return {"status": "ok", "db": db_ok, "qdrant": qdrant_ok}
 
     _discover_routers(app)
 

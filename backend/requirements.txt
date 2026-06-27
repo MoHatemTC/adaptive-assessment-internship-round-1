@@ -23,7 +23,7 @@ celery==5.6.3
 redis==5.2.1
 
 # ── Vector DB ────────────────────────────────────────────────
-qdrant-client==1.14.2
+qdrant-client==1.18.0
 
 # ── Embeddings ───────────────────────────────────────────────
 sentence-transformers==3.3.1
