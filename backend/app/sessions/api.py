@@ -12,6 +12,7 @@ from app.admin.models import Assessment
 from app.core.deps import RateLimitedRoute, get_db, get_session_by_token
 from app.core.security import generate_session_token, hash_token
 from app.proctoring import service as proctoring_service
+from app.shared.schemas.proctoring import ProctoringPolicyResponse
 from app.sessions.models import AssessmentSession
 from app.sessions.schemas import (
     SessionRead,
