@@ -326,11 +326,19 @@ async def embed_and_store_node(state: MemoryAgentState) -> dict[str, Any]:
 
         from app.config import get_settings
         from app.shared.embedder import embed_text
-        from app.shared.qdrant import get_qdrant_client
+        from app.shared.qdrant import get_qdrant_client, is_qdrant_configured
 
         settings = get_settings()
         evidence = card.evidence_summary
         if not evidence or not evidence.strip():
+            return {}
+
+        if not is_qdrant_configured():
+            logger.warning(
+                "qdrant_memory_store_skipped",
+                session_id=card.session_id,
+                reason="QDRANT_URL is empty",
+            )
             return {}
 
         # SentenceTransformer.encode is CPU-bound; run off the event loop.

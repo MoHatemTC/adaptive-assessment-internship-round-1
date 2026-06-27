@@ -10,7 +10,7 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 from app.config import get_settings
 from app.core.logging import get_logger
 from app.shared.embedder import embed_text
-from app.shared.qdrant import get_qdrant_client
+from app.shared.qdrant import get_qdrant_client, is_qdrant_configured
 
 logger = get_logger(__name__)
 
@@ -49,7 +49,12 @@ async def retrieve_relevant_memories(
         Hits ordered by similarity score (highest first).
     """
     settings = get_settings()
-    if not settings.QDRANT_URL.strip():
+    if not is_qdrant_configured():
+        logger.warning(
+            "qdrant_memory_retrieval_disabled",
+            session_id=session_id,
+            reason="QDRANT_URL is empty — returning no memories",
+        )
         return []
 
     query = (query_text or "").strip()

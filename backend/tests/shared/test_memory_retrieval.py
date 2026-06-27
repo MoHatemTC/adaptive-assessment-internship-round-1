@@ -37,11 +37,13 @@ def test_format_retrieval_context_formats_lines():
 
 @pytest.mark.asyncio
 async def test_retrieve_returns_empty_when_qdrant_url_missing():
-    with patch("app.shared.memory_retrieval.get_settings") as mock_settings:
-        mock_settings.return_value.QDRANT_URL = ""
-        mock_settings.return_value.QDRANT_COLLECTION = "platform_memory"
+    with (
+        patch("app.shared.memory_retrieval.is_qdrant_configured", return_value=False),
+        patch("app.shared.memory_retrieval.logger") as mock_logger,
+    ):
         hits = await retrieve_relevant_memories("sess-1", "focus on thinking")
     assert hits == []
+    mock_logger.warning.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -62,6 +64,7 @@ async def test_retrieve_returns_hits_from_qdrant():
     mock_client.query_points = AsyncMock(return_value=mock_response)
 
     with (
+        patch("app.shared.memory_retrieval.is_qdrant_configured", return_value=True),
         patch("app.shared.memory_retrieval.get_settings") as mock_settings,
         patch(
             "app.shared.memory_retrieval.asyncio.to_thread",
