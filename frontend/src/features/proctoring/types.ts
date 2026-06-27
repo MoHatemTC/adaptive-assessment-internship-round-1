@@ -14,7 +14,9 @@ export type ProctoringEventType =
   | "identity_fail"
   | "identity_verified"
   | "face_absent"
+  | "candidate_absent"
   | "multiple_faces"
+  | "multiple_persons_detected"
   | "camera_obstructed"
   | "camera_disabled"
   | "looking_away"
@@ -22,6 +24,7 @@ export type ProctoringEventType =
   | "microphone_muted"
   | "microphone_disabled"
   | "audio_absent"
+  | "external_voice_detected"
   | "session_started"
   | "session_stopped";
 
@@ -96,6 +99,7 @@ export interface IdentityVerifyResponse {
 export interface CameraAnalyzeResponse {
   compliant: boolean;
   face_visible: boolean;
+  person_count: number;
   face_count: number;
   identity_match_score: number | null;
   violations: Array<{

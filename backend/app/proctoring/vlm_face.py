@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,7 +34,7 @@ Analyze the live webcam frame for integrity violations.
 
 Check:
 - Is a human face clearly visible?
-- How many distinct faces are visible?
+- How many distinct people (faces or partial bodies) are visible? Use person_count.
 - Is the camera lens covered, black, or unusable?
 - Is the person looking toward the screen (not turned far away)?
 If a reference photo is included as a second image, estimate whether the live
@@ -42,7 +43,8 @@ face matches that enrolled identity.
 Respond ONLY with a single JSON object — no markdown, no explanation:
 {
   "face_visible": <bool>,
-  "face_count": <int>,
+  "person_count": <int>,
+  "face_count": <int, same as person_count>,
   "camera_obstructed": <bool>,
   "looking_at_screen": <bool>,
   "identity_match_score": <float 0.0-1.0 or null if no reference>,
@@ -55,6 +57,7 @@ class CameraAnalysisResult:
     """Structured output from a live camera frame analysis."""
 
     face_visible: bool
+    person_count: int
     face_count: int
     camera_obstructed: bool
     looking_at_screen: bool
@@ -153,20 +156,20 @@ def violations_from_analysis(
                 description="Camera appears covered or unusable",
             )
         )
-    if not analysis.face_visible:
+    if not analysis.face_visible and analysis.person_count > 0:
         found.append(
             CameraViolation(
                 event_type="face_absent",
                 severity="high",
-                description="No face visible in camera frame",
+                description="Face not clearly visible despite person in frame",
             )
         )
-    if analysis.face_count > 1:
+    if analysis.person_count > 1:
         found.append(
             CameraViolation(
-                event_type="multiple_faces",
+                event_type="multiple_persons_detected",
                 severity="high",
-                description=f"{analysis.face_count} faces detected",
+                description=f"{analysis.person_count} people detected in frame",
             )
         )
     if analysis.face_visible and not analysis.looking_at_screen:
@@ -208,9 +211,13 @@ def _parse_camera_analysis(payload: dict[str, Any]) -> CameraAnalysisResult:
     if identity_match is not None:
         identity_match = bool(identity_match)
 
+    raw_person = payload.get("person_count", payload.get("face_count", 0))
+    person_count = max(0, int(raw_person))
+
     return CameraAnalysisResult(
         face_visible=bool(payload.get("face_visible", False)),
-        face_count=max(0, int(payload.get("face_count", 0))),
+        person_count=person_count,
+        face_count=person_count,
         camera_obstructed=bool(payload.get("camera_obstructed", False)),
         looking_at_screen=bool(payload.get("looking_at_screen", True)),
         identity_match_score=parsed_score,
@@ -269,6 +276,41 @@ async def analyze_camera_frame(
         match_threshold=match_threshold,
     )
     return analysis, violations
+
+
+# Tracks when a session first showed zero people (grace before candidate_absent).
+_absence_started: dict[str, float] = {}
+
+
+def clear_session_camera_state(session_id: str) -> None:
+    """Reset per-session absence grace when proctoring stops."""
+    _absence_started.pop(session_id, None)
+
+
+def apply_candidate_absence_grace(
+    session_id: str,
+    analysis: CameraAnalysisResult,
+    *,
+    grace_seconds: float,
+) -> CameraViolation | None:
+    """Emit candidate_absent only after person_count stays 0 past grace_seconds."""
+    if analysis.camera_obstructed or analysis.person_count > 0:
+        _absence_started.pop(session_id, None)
+        return None
+
+    now = time.monotonic()
+    started = _absence_started.get(session_id)
+    if started is None:
+        _absence_started[session_id] = now
+        return None
+    if now - started < grace_seconds:
+        return None
+
+    return CameraViolation(
+        event_type="candidate_absent",
+        severity="high",
+        description="No person visible in camera frame",
+    )
 
 
 class VLMFaceMatchProvider:

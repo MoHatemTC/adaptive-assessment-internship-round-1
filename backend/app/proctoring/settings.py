@@ -38,6 +38,7 @@ class ProctoringSettings(BaseSettings):
     HF_FACE_MODEL_FILE: str = "arcface.onnx"
     FACE_MATCH_THRESHOLD: float = 0.7
     PROCTORING_HIGH_SEVERITY_THRESHOLD: int = 3
+    PROCTORING_CANDIDATE_ABSENCE_GRACE_SECONDS: float = 5.0
 
     @property
     def face_api_configured(self) -> bool:
