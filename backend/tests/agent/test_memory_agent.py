@@ -412,7 +412,9 @@ async def test_embed_and_store_node_skips_on_qdrant_failure():
     # and force the Qdrant upsert to fail to prove the failure is swallowed.
     with patch(
         "app.shared.embedder.embed_text", return_value=[0.0] * 384
-    ), patch("app.shared.qdrant.get_qdrant_client") as mock_client:
+    ), patch("app.shared.qdrant.is_qdrant_configured", return_value=True), patch(
+        "app.shared.qdrant.get_qdrant_client"
+    ) as mock_client:
         mock_client.return_value.upsert = AsyncMock(
             side_effect=Exception("Qdrant unreachable")
         )
@@ -451,6 +453,7 @@ async def test_embed_and_store_node_upserts_vector_and_payload():
 
     with (
         patch("app.shared.embedder.embed_text", return_value=vector),
+        patch("app.shared.qdrant.is_qdrant_configured", return_value=True),
         patch("app.shared.qdrant.get_qdrant_client") as mock_client,
         patch("app.config.get_settings") as mock_settings,
     ):
