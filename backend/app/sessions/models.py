@@ -46,6 +46,10 @@ class AssessmentSession(Base):
     # JSON: {name, role, level, target_skills, consent_given}
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     # "pending" / "active" / "completed" / "expired" / "flagged"
+    proctoring_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="not_started"
+    )
+    # "not_started" / "active" / "stopped"
     code_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(

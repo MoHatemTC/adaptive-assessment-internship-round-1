@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import DiagramTool, { DiagramNextQuestion } from "@/features/diagram/DiagramTool";
+import { PlatformSessionProctoring } from "@/features/proctoring/PlatformSessionProctoring";
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
@@ -99,6 +100,7 @@ export default function DiagramAssessmentPage() {
   };
 
   return (
+    <PlatformSessionProctoring>
     <main className="flex min-h-screen flex-col items-center justify-center bg-[#FBFBFD] p-6 font-[family-name:var(--font-jakarta)]">
       <div className="mb-6 w-full max-w-2xl">
         <h1 className="text-2xl font-bold text-[#1F2430]">
@@ -151,5 +153,6 @@ export default function DiagramAssessmentPage() {
         </>
       )}
     </main>
+    </PlatformSessionProctoring>
   );
 }

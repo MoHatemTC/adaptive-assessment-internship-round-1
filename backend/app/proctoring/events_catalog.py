@@ -41,10 +41,16 @@ _AUDIO_EVENTS: dict[ProctoringEventType, ProctoringSeverity] = {
     "audio_absent": "high",
 }
 
+_LIFECYCLE_EVENTS: dict[ProctoringEventType, ProctoringSeverity] = {
+    "session_started": "low",
+    "session_stopped": "low",
+}
+
 EVENT_DEFAULT_SEVERITIES: Final[dict[ProctoringEventType, ProctoringSeverity]] = {
     **_BROWSER_EVENTS,
     **_CAMERA_EVENTS,
     **_AUDIO_EVENTS,
+    **_LIFECYCLE_EVENTS,
 }
 
 DEFAULT_ENABLED_CHECKS: Final[list[ProctoringEventType]] = list(

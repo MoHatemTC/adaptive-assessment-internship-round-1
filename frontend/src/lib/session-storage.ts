@@ -12,6 +12,16 @@ export function persistSessionAuth(sessionId: string, accessToken: string): void
   sessionStorage.setItem(SESSION_TOKEN_KEY, accessToken);
 }
 
+export function readSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  return sessionStorage.getItem(SESSION_ID_KEY);
+}
+
+export function readSessionAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return sessionStorage.getItem(SESSION_TOKEN_KEY);
+}
+
 export function persistIdentityReference(referenceB64: string): void {
   sessionStorage.setItem(IDENTITY_REFERENCE_KEY, referenceB64);
 }

@@ -5,7 +5,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.shared.schemas.proctoring import SessionIntegritySnapshot
+from app.shared.schemas.proctoring import (
+    ProctoringPolicyResponse,
+    SessionIntegritySnapshot,
+)
 
 
 class LearnerProfile(BaseModel):
@@ -37,4 +40,6 @@ class SessionRead(BaseModel):
     completed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    proctoring_status: str = "not_started"
     integrity: SessionIntegritySnapshot | None = None
+    proctoring_policy: ProctoringPolicyResponse | None = None

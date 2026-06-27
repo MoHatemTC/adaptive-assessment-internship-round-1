@@ -2,9 +2,12 @@
 
 import type { ReactNode } from "react";
 
-import { useProctoring, type UseProctoringOptions } from "@/features/proctoring/useProctoring";
+import {
+  useSessionProctoring,
+  type UseSessionProctoringOptions,
+} from "@/features/proctoring/useSessionProctoring";
 
-export interface IntegrityMonitorProps extends UseProctoringOptions {
+export interface IntegrityMonitorProps extends UseSessionProctoringOptions {
   children?: ReactNode;
   showBadge?: boolean;
 }
@@ -14,7 +17,7 @@ export function IntegrityMonitor({
   showBadge = true,
   ...options
 }: IntegrityMonitorProps) {
-  const { state } = useProctoring(options);
+  const { state } = useSessionProctoring(options);
 
   return (
     <>
