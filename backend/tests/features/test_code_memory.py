@@ -9,7 +9,7 @@ import pytest
 from sqlmodel import select
 
 from app.core.database import async_session, engine
-from app.features.code import evaluation_memory
+from app.features.code import evaluation
 from app.features.code.models import (
     CodeChallenge,
     CodeMemoryCard,
@@ -92,7 +92,7 @@ async def _run(session_id: str) -> None:
         db.add(grade)
         await db.flush()
 
-        card = await evaluation_memory.extract_memory_card(
+        card = await evaluation.extract_memory_card(
             db,
             session_id=session_id,
             question_index=0,

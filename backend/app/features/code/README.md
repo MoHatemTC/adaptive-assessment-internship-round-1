@@ -8,12 +8,13 @@ generation/grading, platform memory rows, and an examiner-agent `BaseTool`.
 ```mermaid
 flowchart LR
     API[api.py] --> Service[service.py]
+    Service --> Loop[loop.py adaptive orchestration]
+    Loop --> Grading[grading.py]
+    Loop --> Evaluation[evaluation.py]
+    Loop --> Analysis[analysis.py]
+    Loop --> Adaptation[adaptation.py]
     Service --> Sandbox[tool.py E2B execution]
-    Service --> Grading[grading.py LLM rubric]
-    Service --> Memory[evaluation_memory.py]
-    Service --> Analysis[analysis.py]
-    Service --> Adaptation[adaptation.py]
-    Adaptation --> Generator[generation.py]
+    Adaptation --> Generator[llm_generation.py]
     CodeTool[tool.py CodeTool BaseTool] --> Service
 ```
 
@@ -21,12 +22,13 @@ flowchart LR
 |------|----------------|
 | `api.py` | REST routes under `/api/v1/code` |
 | `service.py` | Challenge CRUD, sandbox submit, adaptive submit orchestration |
+| `loop.py` | Adaptive loop orchestration (grade → memory → analysis → contract) |
 | `tool.py` | E2B execution helpers plus examiner-agent `CodeTool` |
 | `grading.py` | Silent LLM rubric persistence into `grade_results` |
-| `evaluation_memory.py` | Silent memory-card extraction |
+| `evaluation.py` | Silent memory-card extraction |
 | `analysis.py` | Skill dimension aggregation |
 | `adaptation.py` | Next-question contract from scores, learner profile, and admin config |
-| `generation.py` | LLM-authored Python/JavaScript challenges |
+| `llm_generation.py` | LLM-authored Python/JavaScript challenges |
 | `languages.py` | Per-language sandbox runner and generator prompt rules |
 
 ## Examiner Agent Contract

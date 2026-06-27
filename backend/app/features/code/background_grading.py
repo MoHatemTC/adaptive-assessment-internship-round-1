@@ -7,7 +7,7 @@ import os
 
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.features.code import evaluation_memory, grading
+from app.features.code import evaluation, grading
 
 _logger = get_logger(__name__)
 
@@ -33,7 +33,7 @@ async def run_llm_grade_upgrade(
     async with async_session() as db:
         try:
             grade = await grading.upgrade_grade_with_llm(db, grade_id)
-            await evaluation_memory.refresh_memory_card_for_grade(
+            await evaluation.refresh_memory_card_for_grade(
                 db,
                 grade.id,
                 difficulty,

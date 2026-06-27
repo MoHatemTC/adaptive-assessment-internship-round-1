@@ -10,7 +10,7 @@ from sqlmodel import select
 
 from app.admin.models import Assessment
 from app.core.database import async_session, engine
-from app.features.code import adaptation, grading, service
+from app.features.code import adaptation, grading, loop, service
 from app.features.code.models import CodeChallenge, CodeSubmission, SubmissionStatus
 from app.sessions.models import (
     AssessmentSession,
@@ -91,7 +91,7 @@ async def test_run_adaptive_loop_persists_all_layers(monkeypatch):
             db.add(submission)
             await db.flush()
 
-            contract, llm_rubric = await service.run_adaptive_loop(
+            contract, llm_rubric = await loop.run_adaptive_loop(
                 db,
                 submission_id=submission.id or 0,
                 session_id=session_id,

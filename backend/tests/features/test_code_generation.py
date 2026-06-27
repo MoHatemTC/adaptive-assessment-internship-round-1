@@ -6,8 +6,8 @@ import uuid
 
 import pytest
 
-from app.features.code import generation, service
-from app.features.code.generation import GeneratedChallengeSpec, GeneratedTestCase
+from app.features.code import llm_generation, service
+from app.features.code.llm_generation import GeneratedChallengeSpec, GeneratedTestCase
 from app.features.code.schemas import GenerateChallengeRequest
 from app.shared.schemas.memory import AdaptiveContract, DimensionScore
 
@@ -64,7 +64,7 @@ async def test_generate_challenge_persists_javascript_spec(monkeypatch):
             ],
         )
 
-    monkeypatch.setattr(generation, "generate_challenge_spec", _fake_generate)
+    monkeypatch.setattr(llm_generation, "generate_challenge_spec", _fake_generate)
     session_id = str(uuid.uuid4())
 
     from app.core.database import async_session, engine
@@ -91,7 +91,7 @@ async def test_generate_challenge_persists_llm_spec(monkeypatch):
     async def _fake_generate(**kwargs) -> GeneratedChallengeSpec:
         return _fake_spec()
 
-    monkeypatch.setattr(generation, "generate_challenge_spec", _fake_generate)
+    monkeypatch.setattr(llm_generation, "generate_challenge_spec", _fake_generate)
     session_id = str(uuid.uuid4())
 
     from app.core.database import async_session, engine
