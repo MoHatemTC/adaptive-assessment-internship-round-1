@@ -28,7 +28,9 @@ _CAMERA_EVENTS: dict[ProctoringEventType, ProctoringSeverity] = {
     "identity_fail": "high",
     "identity_mismatch": "high",
     "face_absent": "high",
+    "candidate_absent": "high",
     "multiple_faces": "high",
+    "multiple_persons_detected": "high",
     "camera_obstructed": "high",
     "camera_disabled": "high",
     "looking_away": "medium",
@@ -39,6 +41,7 @@ _AUDIO_EVENTS: dict[ProctoringEventType, ProctoringSeverity] = {
     "microphone_muted": "medium",
     "microphone_disabled": "high",
     "audio_absent": "high",
+    "external_voice_detected": "high",
 }
 
 _LIFECYCLE_EVENTS: dict[ProctoringEventType, ProctoringSeverity] = {

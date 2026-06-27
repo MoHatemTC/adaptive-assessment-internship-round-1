@@ -27,7 +27,9 @@ ProctoringEventType = Literal[
     "identity_fail",
     "identity_verified",
     "face_absent",
+    "candidate_absent",
     "multiple_faces",
+    "multiple_persons_detected",
     "camera_obstructed",
     "camera_disabled",
     "looking_away",
@@ -35,6 +37,7 @@ ProctoringEventType = Literal[
     "microphone_muted",
     "microphone_disabled",
     "audio_absent",
+    "external_voice_detected",
     "session_started",
     "session_stopped",
 ]
