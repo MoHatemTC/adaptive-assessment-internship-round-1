@@ -14,3 +14,7 @@ Production Supabase was stamped at `0012_examiner_state_column` before that file
 - `0013_diagram_svg_rebuild` — diagram rebuild, child of `0012_examiner_state_column`.
 
 After pulling this change, run `alembic upgrade head` once against Supabase; no manual stamping should be required.
+
+## 2026-06: `0014_proctoring_status_column`
+
+Adds `proctoring_status` (`not_started` / `active` / `stopped`) on `assessment_sessions` for platform-wide proctoring lifecycle (WP-2).

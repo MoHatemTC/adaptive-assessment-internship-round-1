@@ -1,4 +1,4 @@
-import { CodeChallengeView } from "@/features/code/CodeChallengeView";
+import { CodePageClient } from "./CodePageClient";
 
 interface CodePageProps {
   searchParams: Promise<{
@@ -14,19 +14,18 @@ export default async function CodePage({ searchParams }: CodePageProps) {
   const challengeId = params.challenge_id
     ? Number.parseInt(params.challenge_id, 10)
     : undefined;
-  const enableProctoring = params.proctoring === "1";
 
   return (
     <main className="min-h-screen bg-surface px-4 py-8">
-      <CodeChallengeView
-        initialChallengeId={
+      <CodePageClient
+        challengeId={
           challengeId != null && !Number.isNaN(challengeId)
             ? challengeId
             : undefined
         }
-        initialSessionId={params.session_id}
+        sessionId={params.session_id}
         assessmentId={params.assessment_id}
-        enableProctoring={enableProctoring}
+        enableProctoring={params.proctoring === "1"}
       />
     </main>
   );

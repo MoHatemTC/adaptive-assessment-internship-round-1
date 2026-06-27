@@ -21,7 +21,9 @@ export type ProctoringEventType =
   | "identity_mismatch"
   | "microphone_muted"
   | "microphone_disabled"
-  | "audio_absent";
+  | "audio_absent"
+  | "session_started"
+  | "session_stopped";
 
 export type ProctoringSeverity = "low" | "medium" | "high";
 

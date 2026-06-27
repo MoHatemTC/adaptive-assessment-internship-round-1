@@ -35,6 +35,8 @@ ProctoringEventType = Literal[
     "microphone_muted",
     "microphone_disabled",
     "audio_absent",
+    "session_started",
+    "session_stopped",
 ]
 
 ProctoringSeverity = Literal["low", "medium", "high"]

@@ -36,7 +36,12 @@ def _parse_profile(raw: str) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-async def _to_session_read(db: AsyncSession, row: AssessmentSession) -> SessionRead:
+async def _to_session_read(
+    db: AsyncSession,
+    row: AssessmentSession,
+    *,
+    proctoring_policy: ProctoringPolicyResponse | None = None,
+) -> SessionRead:
     integrity = await proctoring_service.get_integrity_snapshot(db, row.id)
     return SessionRead(
         id=row.id,
@@ -48,7 +53,9 @@ async def _to_session_read(db: AsyncSession, row: AssessmentSession) -> SessionR
         completed_at=row.completed_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        proctoring_status=row.proctoring_status,
         integrity=integrity,
+        proctoring_policy=proctoring_policy,
     )
 
 
@@ -102,9 +109,23 @@ async def start_session(
     session.status = "active"
     if session.started_at is None:
         session.started_at = datetime.now(timezone.utc)
+    assessment = await db.get(Assessment, session.assessment_id)
+    assessment_type = None
+    if assessment is not None:
+        tool_config = json.loads(assessment.tool_config or "{}")
+        if isinstance(tool_config, dict):
+            for key in ("coding", "voice", "mcq", "diagram"):
+                if tool_config.get(key):
+                    assessment_type = key
+                    break
+    proctoring_policy = await proctoring_service.start_proctoring_session(
+        db,
+        session.id,
+        assessment_type=assessment_type,
+    )
     await db.commit()
     await db.refresh(session)
-    return await _to_session_read(db, session)
+    return await _to_session_read(db, session, proctoring_policy=proctoring_policy)
 
 
 @router.post("/{session_id}/complete", response_model=SessionRead)
@@ -118,6 +139,7 @@ async def complete_session(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session mismatch")
     if session.status == "completed":
         return await _to_session_read(db, session)
+    await proctoring_service.stop_proctoring_session(db, session.id)
     session.status = "completed"
     session.completed_at = datetime.now(timezone.utc)
     await db.commit()

@@ -37,6 +37,7 @@ from app.shared.schemas.proctoring import (
     ProctoringEventBatchResponse,
     ProctoringEventCreate,
     ProctoringEventRead,
+    ProctoringEventType,
     ProctoringPolicy,
     ProctoringPolicyResponse,
     ProctoringSeverity,
@@ -254,6 +255,77 @@ async def _persist_proctoring_event(
     await db.flush()
     await db.refresh(event)
     return _event_to_read(event)
+
+
+async def _persist_lifecycle_event(
+    db: AsyncSession,
+    *,
+    session: AssessmentSession,
+    event_type: ProctoringEventType,
+    metadata: dict[str, Any] | None = None,
+) -> ProctoringEventRead:
+    """Record server-owned lifecycle events (always persisted)."""
+    if not is_known_event_type(event_type):
+        raise ValueError(f"unknown lifecycle event type: {event_type}")
+
+    event = ProctoringEvent(
+        session_id=session.id,
+        event_type=event_type,
+        severity=default_severity(event_type),  # type: ignore[arg-type]
+        metadata_json=_serialize_metadata(metadata),
+        client_timestamp=None,
+    )
+    db.add(event)
+    await db.flush()
+    await db.refresh(event)
+    _logger.info(
+        "proctoring_lifecycle_event",
+        session_id=session.id,
+        event_type=event_type,
+    )
+    return _event_to_read(event)
+
+
+async def start_proctoring_session(
+    db: AsyncSession,
+    session_id: str,
+    *,
+    assessment_type: str | None = None,
+) -> ProctoringPolicyResponse:
+    """Activate proctoring for a platform session and return the resolved policy."""
+    session = await _get_session_or_404(db, session_id)
+    policy = await resolve_policy(db, session)
+
+    if session.proctoring_status != "active":
+        session.proctoring_status = "active"
+        db.add(session)
+        await _persist_lifecycle_event(
+            db,
+            session=session,
+            event_type="session_started",
+            metadata={"assessment_type": assessment_type} if assessment_type else None,
+        )
+
+    return ProctoringPolicyResponse(
+        session_id=session_id,
+        default_severities=dict(EVENT_DEFAULT_SEVERITIES),
+        **policy.model_dump(),
+    )
+
+
+async def stop_proctoring_session(db: AsyncSession, session_id: str) -> None:
+    """Deactivate proctoring and record session stop."""
+    session = await _get_session_or_404(db, session_id)
+    if session.proctoring_status == "stopped":
+        return
+
+    session.proctoring_status = "stopped"
+    db.add(session)
+    await _persist_lifecycle_event(
+        db,
+        session=session,
+        event_type="session_stopped",
+    )
 
 
 async def _prepare_client_event(

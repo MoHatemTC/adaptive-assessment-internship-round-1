@@ -1,18 +1,27 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { SessionRadarReportView } from "@/features/report/SessionRadarReportView";
+import { completeSession } from "@/lib/session-api";
+import {
+  readSessionAccessToken,
+  readSessionId,
+} from "@/lib/session-storage";
 
 export function AssessmentCompleteClient({ token }: { token: string }) {
   const search = useSearchParams();
-  const sessionId = search.get("session_id");
+  const sessionId = search.get("session_id") ?? readSessionId();
   const accessToken =
     search.get("access_token") ??
-    (typeof window !== "undefined"
-      ? sessionStorage.getItem("masaar_session_token")
-      : null);
+    readSessionAccessToken();
+
+  useEffect(() => {
+    if (!sessionId || !accessToken) return;
+    void completeSession(sessionId, accessToken);
+  }, [accessToken, sessionId]);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-4 py-8">

@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import AdaptiveVoiceSession from "@/features/voice/AdaptiveVoiceSession";
+import { PlatformSessionProctoring } from "@/features/proctoring/PlatformSessionProctoring";
 
 export default function VoiceAssessmentPage() {
   const [completed, setCompleted] = useState(false);
@@ -26,6 +27,7 @@ export default function VoiceAssessmentPage() {
   }
 
   return (
+    <PlatformSessionProctoring>
     <AdaptiveVoiceSession
       sessionId="demo-session-001"
       initialQuestion="Tell me about a recent technical challenge you faced and how you solved it."
@@ -42,5 +44,6 @@ export default function VoiceAssessmentPage() {
       }}
       onComplete={() => setCompleted(true)}
     />
+    </PlatformSessionProctoring>
   );
 }

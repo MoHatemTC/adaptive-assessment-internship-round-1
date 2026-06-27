@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CodeEditor } from "@/features/code/CodeEditor";
-import { IntegrityMonitor } from "@/features/proctoring";
 import {
   generateCodeChallenge,
   listCodeLanguages,
@@ -252,13 +251,6 @@ export function CodeChallengeView({
   }
 
   return (
-    <IntegrityMonitor
-      sessionId={sessionId}
-      enabled={enableProctoring && sessionStarted && !sessionEnded}
-      consentGiven={proctoringConsentGiven}
-      referenceImageB64={referenceImageB64}
-      showBadge={enableProctoring}
-    >
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
@@ -353,6 +345,5 @@ export function CodeChallengeView({
         </div>
       )}
       </div>
-    </IntegrityMonitor>
   );
 }

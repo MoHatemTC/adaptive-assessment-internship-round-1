@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import McqCard, { McqOption } from "@/features/mcq/McqCard";
+import { PlatformSessionProctoring } from "@/features/proctoring/PlatformSessionProctoring";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
@@ -134,6 +135,7 @@ export default function McqAssessmentPage() {
   );
 
   return (
+    <PlatformSessionProctoring>
     <main className="flex min-h-screen flex-col items-center justify-center bg-[#FBFBFD] p-6 font-[family-name:var(--font-jakarta)]">
       <div className="mb-6 w-full max-w-2xl">
         <h1 className="text-2xl font-bold text-[#1F2430]">
@@ -184,5 +186,6 @@ export default function McqAssessmentPage() {
         </>
       )}
     </main>
+    </PlatformSessionProctoring>
   );
 }
