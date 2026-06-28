@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import AdaptiveVoiceSession from "@/features/voice/AdaptiveVoiceSession";
 import { PlatformSessionProctoring } from "@/features/proctoring/PlatformSessionProctoring";
+import { resolvePlatformSessionId } from "@/lib/platform-session";
 
 export default function VoiceAssessmentPage() {
   const [completed, setCompleted] = useState(false);
+  const sessionId = useMemo(() => resolvePlatformSessionId("demo-session-001"), []);
 
   if (completed) {
     return (
@@ -29,7 +31,7 @@ export default function VoiceAssessmentPage() {
   return (
     <PlatformSessionProctoring>
     <AdaptiveVoiceSession
-      sessionId="demo-session-001"
+      sessionId={sessionId}
       initialQuestion="Tell me about a recent technical challenge you faced and how you solved it."
       initialDifficulty="beginner"
       timeLimitSeconds={120}

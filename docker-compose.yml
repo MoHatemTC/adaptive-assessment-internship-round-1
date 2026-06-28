@@ -38,6 +38,7 @@ services:
       # Browser must call localhost; backend:8000 only works inside Docker network.
       NEXT_PUBLIC_API_BASE_URL: ""
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_DEMO_ASSESSMENT_ID: a1b2c3d4-e5f6-4789-a012-3456789abcde
       BACKEND_URL: http://backend:8000
     ports:
       - "3000:3000"

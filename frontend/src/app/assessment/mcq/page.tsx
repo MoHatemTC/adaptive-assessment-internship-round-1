@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import McqCard, { McqOption } from "@/features/mcq/McqCard";
 import { PlatformSessionProctoring } from "@/features/proctoring/PlatformSessionProctoring";
+import { resolvePlatformSessionId } from "@/lib/platform-session";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
@@ -25,7 +26,7 @@ interface AnswerResponse {
 }
 
 export default function McqAssessmentPage() {
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
+  const sessionId = useMemo(() => resolvePlatformSessionId(), []);
 
   const [currentQuestion, setCurrentQuestion] = useState<McqQuestion | null>(
     null

@@ -1,12 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { verifySessionIdentity } from "@/features/proctoring/api";
 import { signInSession, startSession } from "@/lib/session-api";
 import {
+  persistAssessmentId,
   persistIdentityReference,
   persistSessionAuth,
 } from "@/lib/session-storage";
@@ -109,11 +109,12 @@ export function AssessmentVerifyClient({
 
       await startSession(signIn.session_id, signIn.access_token);
       persistSessionAuth(signIn.session_id, signIn.access_token);
+      persistAssessmentId(assessmentId);
       persistIdentityReference(frame);
       stopCamera();
 
       router.push(
-        `/assessment/${assessmentId}/chat?session_id=${encodeURIComponent(signIn.session_id)}`,
+        `/assessment/${assessmentId}/hub?session_id=${encodeURIComponent(signIn.session_id)}`,
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed");
@@ -121,7 +122,38 @@ export function AssessmentVerifyClient({
     }
   }, [assessmentId, consent, name, router, stopCamera]);
 
-  const chatHref = `/assessment/${assessmentId}/chat`;
+  const handleSkipDemo = useCallback(async () => {
+    if (!consent) {
+      setError("Accept monitoring consent to start a demo session.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const signIn = await signInSession({
+        assessment_id: assessmentId,
+        learner_profile: {
+          name: name.trim() || "Demo Learner",
+          consent_given: true,
+        },
+      });
+      await startSession(signIn.session_id, signIn.access_token);
+      persistSessionAuth(signIn.session_id, signIn.access_token);
+      persistAssessmentId(assessmentId);
+      const video = videoRef.current;
+      const frame = video ? captureVideoFrame(video) : null;
+      if (frame) {
+        persistIdentityReference(frame);
+      }
+      stopCamera();
+      router.push(
+        `/assessment/${assessmentId}/hub?session_id=${encodeURIComponent(signIn.session_id)}`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start demo session");
+      setLoading(false);
+    }
+  }, [assessmentId, consent, name, router, stopCamera]);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center gap-6 px-4 py-8">
@@ -196,12 +228,14 @@ export function AssessmentVerifyClient({
         >
           {loading ? "Verifying…" : "Verify identity & continue"}
         </button>
-        <Link
-          href={chatHref}
-          className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-neutral hover:bg-surface-muted"
+        <button
+          type="button"
+          onClick={() => void handleSkipDemo()}
+          disabled={loading || !consent}
+          className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-neutral hover:bg-surface-muted disabled:opacity-50"
         >
-          Skip (demo only)
-        </Link>
+          Skip verify (demo)
+        </button>
       </div>
     </main>
   );

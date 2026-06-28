@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import DiagramTool, { DiagramNextQuestion } from "@/features/diagram/DiagramTool";
 import { PlatformSessionProctoring } from "@/features/proctoring/PlatformSessionProctoring";
+import { resolvePlatformSessionId } from "@/lib/platform-session";
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
@@ -41,7 +42,7 @@ const SEED_SVG = `<svg width="600" height="400" viewBox="0 0 600 400" xmlns="htt
 </svg>`;
 
 export default function DiagramAssessmentPage() {
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
+  const sessionId = useMemo(() => resolvePlatformSessionId(), []);
 
   const [currentQuestion, setCurrentQuestion] = useState<DiagramQuestion | null>(
     null
