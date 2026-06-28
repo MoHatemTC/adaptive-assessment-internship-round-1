@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 from sqlalchemy import create_engine, text
 
@@ -41,6 +39,17 @@ def sqlite_conn():
         )
         """,
         """
+        CREATE TABLE voice_memory_cards (
+            id INTEGER PRIMARY KEY,
+            voice_session_id INTEGER NOT NULL,
+            memory_card_id INTEGER,
+            competency TEXT NOT NULL,
+            rubric_scores_json TEXT NOT NULL DEFAULT '{}',
+            communication_signals_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TABLE diagram_questions (
             id INTEGER PRIMARY KEY,
             svg_content TEXT NOT NULL,
@@ -69,6 +78,11 @@ def sqlite_conn():
         """
         INSERT INTO code_memory_cards VALUES (
             1, 1, 'sess-1', 0, 10, 0.8, 0.9, '[]', 'ok', 'ok'
+        )
+        """,
+        """
+        INSERT INTO voice_memory_cards VALUES (
+            1, 42, 1, 'communication', '{}', '{}', '2026-01-01T00:00:00'
         )
         """,
     ]
@@ -122,6 +136,26 @@ def test_audit_flags_orphan_code_memory_cards(sqlite_conn):
     assert any("orphan memory_card_id" in i for i in report.issues)
 
 
+def test_audit_flags_orphan_voice_memory_cards(sqlite_conn):
+    sqlite_conn.execute(
+        text(
+            """
+            INSERT INTO voice_memory_cards VALUES (
+                2, 99, 999, 'problem_solving', '{}', '{}', '2026-01-01T00:00:00'
+            )
+            """
+        )
+    )
+    sqlite_conn.commit()
+    report = run_normalization_audit(sqlite_conn)
+    assert not report.ok
+    assert any("voice_memory_cards" in i and "orphan" in i for i in report.issues)
+
+
 def test_audit_notes_extension_tables_are_not_duplicates(sqlite_conn):
     report = run_normalization_audit(sqlite_conn)
-    assert any("extension table" in n for n in report.notes)
+    notes_text = " ".join(report.notes)
+    assert "extension table" in notes_text
+    # Both code and voice extension tables should be noted
+    assert "code_memory_cards" in notes_text
+    assert "voice_memory_cards" in notes_text
