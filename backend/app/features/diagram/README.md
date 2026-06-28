@@ -44,7 +44,7 @@ Two tables added via migration `0001_diagram`:
 **`diagram_questions`** — the assessment item
 `id` · `image_url` · `prompt` · `rubric` · `difficulty` · `dimension` · `created_at`
 
-**`diagram_answers`** — the learner's response per session
+**`diagram_responses`** — the learner's response per session (replaces legacy `diagram_answers`)
 `id` · `session_id` · `question_id` · `answer_text` · `score` · `grading_feedback` · `graded_at` · `submitted_at`
 
 Run the migration:

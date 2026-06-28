@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.features.adaptation.schemas import AnswerRecord
 
 
-async def _fetch_diagram_answers(db: AsyncSession, session_id: uuid.UUID) -> list[AnswerRecord]:
+async def _fetch_diagram_responses(db: AsyncSession, session_id: uuid.UUID) -> list[AnswerRecord]:
     from app.features.diagram.models import DiagramResponse
 
     result = await db.execute(
@@ -108,7 +108,7 @@ async def fetch_all_answers(db: AsyncSession, session_id: uuid.UUID) -> list[Ans
     new feature lands — nothing else in core/adaptation changes.
     """
     answers: list[AnswerRecord] = []
-    answers += await _fetch_diagram_answers(db, session_id)
+    answers += await _fetch_diagram_responses(db, session_id)
     answers += await _fetch_mcq_answers(db, session_id)
     answers += await _fetch_voice_answers(db, session_id)
     answers += await _fetch_code_answers(db, session_id)
