@@ -25,3 +25,13 @@ export function readSessionAccessToken(): string | null {
 export function persistIdentityReference(referenceB64: string): void {
   sessionStorage.setItem(IDENTITY_REFERENCE_KEY, referenceB64);
 }
+
+export function readSessionAuth(): { sessionId: string | null; token: string | null } {
+  if (typeof window === "undefined") {
+    return { sessionId: null, token: null };
+  }
+  return {
+    sessionId: sessionStorage.getItem(SESSION_ID_KEY),
+    token: sessionStorage.getItem(SESSION_TOKEN_KEY),
+  };
+}

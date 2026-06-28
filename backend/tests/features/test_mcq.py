@@ -423,7 +423,11 @@ async def test_evaluate_calls_memory_agent_with_correct_tool_type():
 @pytest.mark.asyncio
 async def test_loop_returns_complete_when_last_question():
     eval_mock = AsyncMock(return_value={"memory_card": None, "memory_summary": ""})
-    with patch("app.features.mcq.loop.evaluate_mcq_answer", new=eval_mock):
+    analyze_mock = AsyncMock(return_value={})
+    with (
+        patch("app.features.mcq.loop.evaluate_mcq_answer", new=eval_mock),
+        patch("app.features.mcq.loop.analyze_mcq_session", new=analyze_mock),
+    ):
         result = await run_mcq_loop(
             session_id="s1",
             question_index=4,
@@ -432,12 +436,17 @@ async def test_loop_returns_complete_when_last_question():
             db=AsyncMock(),
         )
     assert result["is_complete"] is True
+    analyze_mock.assert_awaited_once_with("s1", 4)
 
 
 @pytest.mark.asyncio
 async def test_loop_returns_not_complete_when_more_questions_remain():
     eval_mock = AsyncMock(return_value={"memory_card": None, "memory_summary": ""})
-    with patch("app.features.mcq.loop.evaluate_mcq_answer", new=eval_mock):
+    analyze_mock = AsyncMock(return_value={})
+    with (
+        patch("app.features.mcq.loop.evaluate_mcq_answer", new=eval_mock),
+        patch("app.features.mcq.loop.analyze_mcq_session", new=analyze_mock),
+    ):
         result = await run_mcq_loop(
             session_id="s1",
             question_index=0,
@@ -446,6 +455,7 @@ async def test_loop_returns_not_complete_when_more_questions_remain():
             db=AsyncMock(),
         )
     assert result["is_complete"] is False
+    analyze_mock.assert_awaited_once_with("s1", 0)
 
 
 def test_answer_endpoint_response_never_contains_score():

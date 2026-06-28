@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 
-import { SessionRadarReportView } from "@/features/report/SessionRadarReportView";
 import { completeSession } from "@/lib/session-api";
 import {
   readSessionAccessToken,
@@ -28,20 +27,10 @@ export function AssessmentCompleteClient({ token }: { token: string }) {
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold text-neutral">Assessment complete</h1>
         <p className="text-sm text-neutral/80">
-          Thank you for completing your assessment. Your skill profile is below.
+          Thank you for completing your assessment. Your results will be
+          reviewed and shared with you.
         </p>
       </header>
-
-      {sessionId ? (
-        <SessionRadarReportView
-          sessionId={sessionId}
-          accessToken={accessToken ?? undefined}
-        />
-      ) : (
-        <p className="text-sm text-neutral/70">
-          No session id provided — radar report unavailable.
-        </p>
-      )}
 
       <div className="flex gap-3 pt-2">
         <Link

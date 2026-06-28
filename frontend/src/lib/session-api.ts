@@ -60,14 +60,33 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
-export function signInSession(payload: {
-  assessment_id: string;
-  learner_profile: LearnerProfile;
-}): Promise<SessionSignInResponse> {
-  return request<SessionSignInResponse>("/api/v1/sessions/sign-in", {
+export async function signInSession(
+  assessmentId: string,
+  learnerProfile: LearnerProfile,
+  cvFile?: File,
+): Promise<SessionSignInResponse> {
+  const formData = new FormData();
+  formData.append("assessment_id", assessmentId);
+  formData.append("learner_profile", JSON.stringify(learnerProfile));
+  if (cvFile) formData.append("cv_file", cvFile);
+
+  // Raw fetch (not the JSON `request` helper) so the browser sets the
+  // multipart boundary automatically. Do not set Content-Type manually.
+  const response = await fetch(apiUrl("/api/v1/sessions/sign-in"), {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: formData,
   });
+  if (!response.ok) {
+    let detail = `Request failed with status ${response.status}`;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      // keep default
+    }
+    throw new Error(detail);
+  }
+  return (await response.json()) as SessionSignInResponse;
 }
 
 export function startSession(
@@ -88,6 +107,52 @@ export function completeSession(
   return request<SessionRead>(
     `/api/v1/sessions/${sessionId}/complete`,
     { method: "POST" },
+    accessToken,
+  );
+}
+
+export async function listAssessmentSessions(
+  assessmentId: string,
+  adminToken: string,
+): Promise<Array<{ id: string; status: string; created_at: string; learner_name: string }>> {
+  return request<
+    Array<{ id: string; status: string; created_at: string; learner_name: string }>
+  >(
+    `/api/v1/sessions?assessment_id=${encodeURIComponent(assessmentId)}`,
+    { method: "GET" },
+    adminToken,
+  );
+}
+
+export interface NextToolInfo {
+  tool: string;
+  difficulty: string;
+  question_number: number;
+  total_for_tool: number;
+}
+
+export interface ExaminerRespondResponse {
+  current_tool: string | null;
+  next_tool_info: NextToolInfo | null;
+  is_complete: boolean;
+}
+
+/**
+ * Advance the examiner router and learn which tool to render next. The answer
+ * itself is graded by the tool's own endpoint; this only sequences tools.
+ *
+ * @param action - "start" to fetch the first tool, "next" to advance one
+ *   question, or "complete_tool" to finish the current tool.
+ */
+export function submitResponse(
+  sessionId: string,
+  tool: string,
+  action: "start" | "next" | "complete_tool",
+  accessToken: string,
+): Promise<ExaminerRespondResponse> {
+  return request<ExaminerRespondResponse>(
+    `/api/v1/sessions/${sessionId}/respond`,
+    { method: "POST", body: JSON.stringify({ tool, action }) },
     accessToken,
   );
 }

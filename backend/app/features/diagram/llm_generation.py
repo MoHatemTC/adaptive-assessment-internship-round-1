@@ -25,6 +25,21 @@ def _build_diagram_generation_prompt(
     learner_profile: Dict[str, Any] | None = None,
     admin_config: Dict[str, Any] | None = None,
 ) -> str:
+    cv_context = (learner_profile or {}).get("cv_context", {})
+    if cv_context:
+        cv_hint = f"""
+Candidate background from CV:
+- Current role: {cv_context.get('current_role', 'unknown')}
+- Experience: {cv_context.get('experience_years', 0)} years
+- Key skills: {', '.join(cv_context.get('skills', [])[:5])}
+- Technologies: {', '.join(cv_context.get('technologies', [])[:5])}
+- Summary: {cv_context.get('cv_summary', '')}
+
+Use this context to calibrate question difficulty and topic relevance.
+"""
+    else:
+        cv_hint = ""
+
     return f"""
 Generate exactly ONE SVG diagram question for an adaptive assessment.
 
@@ -36,7 +51,7 @@ Learner profile:
 
 Admin / blueprint configuration:
 {json.dumps(admin_config or {}, ensure_ascii=False)}
-
+{cv_hint}
 Rules:
 - The question must match the adaptive context.
 - Difficulty must be one of: beginner, intermediate, advanced.
