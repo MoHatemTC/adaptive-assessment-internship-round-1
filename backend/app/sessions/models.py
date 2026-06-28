@@ -51,7 +51,14 @@ class AssessmentSession(Base):
     )
     # "not_started" / "active" / "stopped"
     code_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    examiner_state_json: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Serialized ExaminerState JSON for the adaptive examiner",
+    )
+    token_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
     expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

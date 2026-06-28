@@ -6,6 +6,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -38,3 +43,21 @@ class AssessmentRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class BlueprintGenerateResponse(BaseModel):
+    """Admin-facing result of generating a blueprint for an assessment."""
+
+    assessment_id: str
+    title: str
+    blueprint: dict[str, Any]
+    shareable_link: str
+
+
+class AssessmentLinkResponse(BaseModel):
+    """Shareable link payload for a published (active) assessment."""
+
+    assessment_id: str
+    shareable_link: str
+    title: str
+    status: str

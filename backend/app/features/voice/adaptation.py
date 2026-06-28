@@ -130,6 +130,21 @@ async def generate_next_voice_question(
     learner_level = learner_profile.get("level", "mid")
     allowed_topics = admin_config.get("allowed_topics", ["technical skills"])
 
+    cv_context = learner_profile.get("cv_context", {})
+    if cv_context:
+        cv_hint = f"""
+Candidate background from CV:
+- Current role: {cv_context.get('current_role', 'unknown')}
+- Experience: {cv_context.get('experience_years', 0)} years
+- Key skills: {', '.join(cv_context.get('skills', [])[:5])}
+- Technologies: {', '.join(cv_context.get('technologies', [])[:5])}
+- Summary: {cv_context.get('cv_summary', '')}
+
+Use this context to calibrate question difficulty and topic relevance.
+"""
+    else:
+        cv_hint = ""
+
     depth_instruction = (
         "Ask a deep follow-up probing implementation details, edge cases, "
         "or asking the learner to critique or improve their earlier answer."
@@ -150,7 +165,8 @@ async def generate_next_voice_question(
         f"Dimension to probe: {weakest_dim}\n"
         f"Allowed topics: {allowed_topics}\n"
         f"Memory summary: {memory_summary or 'No prior answers yet.'}\n"
-        f"Instruction: {depth_instruction}\n\n"
+        f"Instruction: {depth_instruction}\n"
+        f"{cv_hint}\n"
         "Generate the next interview question:"
     )
 

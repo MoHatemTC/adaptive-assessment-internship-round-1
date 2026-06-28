@@ -40,7 +40,7 @@ def _admin_headers() -> dict[str, str]:
 async def test_admin_login_returns_token(admin_db_client):
     response = await admin_db_client.post(
         "/api/v1/auth/token",
-        data={"username": "admin", "password": "admin"},
+        json={"username": "admin", "password": "admin"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -52,7 +52,7 @@ async def test_admin_login_returns_token(admin_db_client):
 async def test_admin_login_rejects_bad_credentials(admin_db_client):
     response = await admin_db_client.post(
         "/api/v1/auth/token",
-        data={"username": "admin", "password": "wrong"},
+        json={"username": "admin", "password": "wrong"},
     )
     assert response.status_code == 401
 

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -35,6 +34,7 @@ export function AssessmentVerifyClient({
 
   const [name, setName] = useState("");
   const [consent, setConsent] = useState(false);
+  const [cvFile, setCvFile] = useState<File | undefined>();
   const [cameraReady, setCameraReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,13 +87,14 @@ export function AssessmentVerifyClient({
     setLoading(true);
     setError(null);
     try {
-      const signIn = await signInSession({
-        assessment_id: assessmentId,
-        learner_profile: {
+      const signIn = await signInSession(
+        assessmentId,
+        {
           name: name.trim() || "Learner",
           consent_given: true,
         },
-      });
+        cvFile,
+      );
 
       const verification = await verifySessionIdentity({
         session_id: signIn.session_id,
@@ -119,9 +120,7 @@ export function AssessmentVerifyClient({
       setError(err instanceof Error ? err.message : "Verification failed");
       setLoading(false);
     }
-  }, [assessmentId, consent, name, router, stopCamera]);
-
-  const chatHref = `/assessment/${assessmentId}/chat`;
+  }, [assessmentId, consent, name, cvFile, router, stopCamera]);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center gap-6 px-4 py-8">
@@ -164,6 +163,19 @@ export function AssessmentVerifyClient({
         />
       </label>
 
+      <label className="block text-sm text-neutral">
+        <span className="mb-1 block font-medium">Upload your CV (optional)</span>
+        <input
+          type="file"
+          accept=".pdf"
+          onChange={(event) => setCvFile(event.target.files?.[0])}
+          className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm"
+        />
+        <span className="mt-1 block text-xs text-neutral/60">
+          Your CV helps us personalize the assessment
+        </span>
+      </label>
+
       <div className="space-y-3">
         <video
           ref={videoRef}
@@ -196,12 +208,6 @@ export function AssessmentVerifyClient({
         >
           {loading ? "Verifying…" : "Verify identity & continue"}
         </button>
-        <Link
-          href={chatHref}
-          className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-neutral hover:bg-surface-muted"
-        >
-          Skip (demo only)
-        </Link>
       </div>
     </main>
   );

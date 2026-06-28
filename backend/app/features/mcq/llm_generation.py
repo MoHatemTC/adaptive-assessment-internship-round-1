@@ -45,6 +45,21 @@ def _build_mcq_generation_prompt(
     Returns:
         The fully rendered prompt string.
     """
+    cv_context = (learner_profile or {}).get("cv_context", {})
+    if cv_context:
+        cv_hint = f"""
+Candidate background from CV:
+- Current role: {cv_context.get('current_role', 'unknown')}
+- Experience: {cv_context.get('experience_years', 0)} years
+- Key skills: {', '.join(cv_context.get('skills', [])[:5])}
+- Technologies: {', '.join(cv_context.get('technologies', [])[:5])}
+- Summary: {cv_context.get('cv_summary', '')}
+
+Use this context to calibrate question difficulty and topic relevance.
+"""
+    else:
+        cv_hint = ""
+
     return f"""
 Generate exactly ONE multiple-choice question for an adaptive assessment.
 
@@ -56,7 +71,7 @@ Learner profile:
 
 Admin / blueprint configuration:
 {json.dumps(admin_config or {}, ensure_ascii=False)}
-
+{cv_hint}
 Rules:
 - The question must match next_dimension, next_focus, and next_difficulty.
 - Difficulty must be one of: beginner, intermediate, advanced.
