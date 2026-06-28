@@ -279,6 +279,10 @@ async def analyze_camera_frame(
 
 
 # Tracks when a session first showed zero people (grace before candidate_absent).
+# NOTE: this is a single-process in-memory dict. With multiple uvicorn workers
+# (--workers N) each worker holds its own copy, so the grace timer can reset
+# between requests. Acceptable for single-worker deployments; if you scale to
+# multiple workers, move this state to Redis or a DB-backed counter.
 _absence_started: dict[str, float] = {}
 
 
