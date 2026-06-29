@@ -23,6 +23,7 @@ ProctoringEventType = Literal[
     "copy_paste",
     "screenshot",
     "ai_usage",
+    "extension_detected",
     "idle_timeout",
     "identity_fail",
     "identity_verified",
@@ -54,7 +55,7 @@ class ProctoringPolicy(BaseModel):
         high_severity_threshold: Number of high-severity events that auto-flags
             the session.
         enabled_checks: Event types the monitor should enforce for this session.
-        camera_poll_interval_seconds: Recommended interval for camera frame analysis.
+        camera_poll_interval_seconds: Recommended interval (seconds) for camera frame analysis (1–2s).
         event_cooldown_seconds: Minimum gap before the same event type is recorded again.
         require_camera: Whether camera consent and monitoring are expected.
         require_microphone: Whether microphone monitoring is expected (e.g. voice tool).
@@ -62,7 +63,7 @@ class ProctoringPolicy(BaseModel):
 
     high_severity_threshold: int = Field(ge=1, default=3)
     enabled_checks: list[ProctoringEventType] = Field(default_factory=list)
-    camera_poll_interval_seconds: int = Field(ge=5, le=120, default=20)
+    camera_poll_interval_seconds: float = Field(ge=1.0, le=2.0, default=1.5)
     event_cooldown_seconds: int = Field(ge=0, le=300, default=30)
     require_camera: bool = True
     require_microphone: bool = False
@@ -158,6 +159,8 @@ class CameraAnalyzeResponse(BaseModel):
 
     compliant: bool
     face_visible: bool
+    looking_at_screen: bool = True
+    person_count: int = Field(ge=0)
     face_count: int = Field(ge=0)
     identity_match_score: Optional[float] = Field(None, ge=0.0, le=1.0)
     violations: list[CameraViolationRead]

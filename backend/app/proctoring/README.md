@@ -223,3 +223,46 @@ interface SessionIntegritySummary {
 ```bash
 cd backend && pytest tests/proctoring/ -q
 ```
+
+## Sprint 4 integration (Karim / Abutaleb)
+
+### Karim — wire enforcement in new tool endpoints
+
+Call at the top of any handler that accepts a platform ``session_id``:
+
+```python
+from app.proctoring.enforcement import ensure_tool_session_allowed
+
+await ensure_tool_session_allowed(db, session_id)
+```
+
+Already wired: code generate/submit, MCQ answer, diagram answer, voice adaptive start, examiner ``POST /sessions/{id}/respond``.
+
+Bearer-authenticated routes should use:
+
+```python
+from app.proctoring.deps import require_active_proctored_session
+```
+
+### Abutaleb — admin integrity + chat UI
+
+- **Integrity panel:** `GET /api/v1/admin/sessions/{session_id}/integrity-summary` (admin JWT)
+- **Frontend helper:** `getSessionIntegritySummary(sessionId)` in `frontend/src/lib/admin-api.ts`
+- **Chat proctoring:** wrap tools in `SessionProctoringShell` with `manageLifecycle={false}`; session completes only via explicit complete page
+- **Post-completion pipeline:** `complete_session` enqueues Celery `reports.build_session_radar` → `reports.email_session_report` (requires `SMTP_*` env)
+
+### LLM judge (stretch)
+
+- Stub: `app/agent/nodes/judge.py` — `run_session_judge(db, session_id)` reads `grade_results.rubric_scores.overall`
+- Karim: ensure each tool loop writes `grade_results` before examiner advances
+
+### Env (email)
+
+| Variable | Purpose |
+| -------- | ------- |
+| `SMTP_HOST` | Mail server |
+| `SMTP_PORT` | Default 587 |
+| `SMTP_USER` / `SMTP_PASSWORD` | Auth |
+| `SMTP_FROM` | From address |
+| `ADMIN_REPORT_EMAIL` | Admin copy on completion |
+
