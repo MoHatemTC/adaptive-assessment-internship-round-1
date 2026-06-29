@@ -43,7 +43,20 @@ class DiagramNextQuestion(BaseModel):
 
 
 class DiagramAnswerResponse(BaseModel):
-    """Learner-safe response. Never includes score, feedback, or correct_label."""
-
     next_question: Optional[DiagramNextQuestion] = None
     is_complete: bool
+    status: str = "ready"
+    total_questions: Optional[int] = None
+
+
+class DiagramStartResponse(BaseModel):
+    status: str
+    total_questions: int
+    question: Optional[DiagramNextQuestion] = None
+
+
+class DiagramPendingQuestionResponse(BaseModel):
+    status: str
+    total_questions: int
+    question: Optional[DiagramNextQuestion] = None
+    error: Optional[str] = None
