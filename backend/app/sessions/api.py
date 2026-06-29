@@ -33,6 +33,10 @@ from app.core.security import generate_session_token, hash_token
 from app.proctoring import service as proctoring_service
 from app.proctoring.deps import require_active_proctored_session
 from app.sessions.models import AssessmentSession
+from app.sessions.time_enforcement import (
+    apply_session_deadline,
+    load_blueprint_for_session,
+)
 from app.sessions.schemas import (
     ExaminerRespondRequest,
     ExaminerRespondResponse,
@@ -232,6 +236,8 @@ async def start_session(
     session.status = "active"
     if session.started_at is None:
         session.started_at = datetime.now(timezone.utc)
+    blueprint = await load_blueprint_for_session(db, session)
+    apply_session_deadline(session, blueprint)
     assessment = await db.get(Assessment, session.assessment_id)
     assessment_type = None
     if assessment is not None:
