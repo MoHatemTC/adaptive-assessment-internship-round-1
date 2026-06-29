@@ -41,17 +41,42 @@ from app.core.logging import get_logger
 _settings = get_settings()
 _logger = get_logger(__name__)
 
+def _engine_kwargs(database_url: str) -> dict[str, object]:
+    """Build engine kwargs, adding fail-fast timeouts for asyncpg/Postgres.
+
+    Without an explicit connect timeout, a slow or unreachable host (e.g. a
+    transient Supabase DNS/connectivity blip) makes asyncpg block for ~60s
+    before the request is cancelled and surfaces as a 500. A short
+    ``timeout`` fails fast so the pool can retry a healthy connection, and
+    ``command_timeout`` caps individual queries.
+    """
+    kwargs: dict[str, object] = {
+        "pool_size": 10,
+        "max_overflow": 20,
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,
+        # Wait at most 10s for a free pooled connection before erroring.
+        "pool_timeout": 10,
+    }
+    if "asyncpg" in database_url:
+        kwargs["connect_args"] = {
+            # Seconds to establish a new TCP/TLS connection to Postgres.
+            "timeout": 10.0,
+            # Seconds before an individual statement is cancelled.
+            "command_timeout": 30.0,
+        }
+    return kwargs
+
+
 #: Process-wide async engine. The pool is sized for the FastAPI layer's
 #: concurrency: up to ``pool_size`` persistent connections plus ``max_overflow``
 #: burst connections. ``pool_pre_ping`` transparently discards stale connections
 #: and ``pool_recycle`` caps connection lifetime so the server never serves a
-#: dead socket.
+#: dead socket. ``connect_args`` add fail-fast connect/command timeouts so a
+#: slow host cannot stall a request for the full OS-level TCP timeout.
 engine = create_async_engine(
     _settings.DATABASE_URL,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,
-    pool_recycle=3600,
+    **_engine_kwargs(_settings.DATABASE_URL),
 )
 
 #: Session factory bound to :data:`engine`. ``expire_on_commit=False`` keeps ORM
