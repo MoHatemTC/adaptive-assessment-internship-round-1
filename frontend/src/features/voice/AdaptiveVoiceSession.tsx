@@ -107,6 +107,13 @@ export default function AdaptiveVoiceSession({
   const [followUpDepth, setFollowUpDepth] = useState<FollowUpDepth>("simple");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const maxQuestions =
+    typeof adminConfig.max_questions === "number"
+      ? adminConfig.max_questions
+      : typeof adminConfig.question_count === "number"
+        ? adminConfig.question_count
+        : 10;
+
   const initSession = useCallback(
     async (question: string, difficulty: Difficulty, qIndex: number) => {
       try {
@@ -157,7 +164,7 @@ export default function AdaptiveVoiceSession({
 
         const contract = result.adaptive_contract;
 
-        if (!contract || contract.stop || questionIndex >= 9) {
+        if (!contract || contract.stop || questionIndex >= maxQuestions - 1) {
           setPhase("complete");
           onComplete?.();
           return;
@@ -204,6 +211,7 @@ export default function AdaptiveVoiceSession({
       timeLimitSeconds,
       learnerProfile,
       adminConfig,
+      maxQuestions,
       onComplete,
     ],
   );
@@ -220,7 +228,7 @@ export default function AdaptiveVoiceSession({
   };
 
   const wsUrl = `${getWsBase()}/voice/sessions`;
-  const progressPct = (questionIndex / 10) * 100;
+  const progressPct = ((questionIndex + 1) / maxQuestions) * 100;
 
   return (
     <>

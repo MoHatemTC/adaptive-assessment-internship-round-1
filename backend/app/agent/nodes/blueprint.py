@@ -48,7 +48,8 @@ Required JSON shape:
     }
   },
   "skill_dimensions": ["thinking", "soft", "work", "digital_ai", "growth"],
-  "total_questions": int
+  "total_questions": int,
+  "session_time_limit_seconds": null
 }
 
 Include one "tools" entry per tool, keyed exactly: "mcq", "voice", "diagram",
@@ -60,8 +61,12 @@ Rules:
 - min_difficulty must be <= max_difficulty (beginner < intermediate < advanced).
 - skill_dimensions: non-empty subset of the five valid values.
 - question_count per tool: 1-10.
-- For the voice tool: time_limit_seconds should be 120-300 if enabled, else null.
-- For every other tool: time_limit_seconds must be null.
+- session_time_limit_seconds: optional whole-assessment sitting budget in seconds
+  (e.g. 3600 for one hour). Use null when no global limit is needed.
+- For each enabled tool set time_limit_seconds to the per-question learner budget
+  in seconds (e.g. code 600, mcq 120, diagram 300, voice 180). Use null only when
+  the tool should have no per-question timer.
+- For voice: prefer 120-300 seconds per question when enabled.
 """.strip()
 
 
@@ -153,6 +158,19 @@ async def run_planner(
         raise ValueError(
             f"Planner LLM returned unparseable blueprint: {exc}"
         ) from exc
+
+    enabled_total = sum(
+        cfg.question_count
+        for cfg in blueprint.tools.values()
+        if cfg.enabled and cfg.question_count > 0
+    )
+    if blueprint.total_questions != enabled_total:
+        logger.warning(
+            "planner_total_questions_adjusted",
+            reported=blueprint.total_questions,
+            computed=enabled_total,
+        )
+        blueprint = blueprint.model_copy(update={"total_questions": enabled_total})
 
     logger.info(
         "blueprint_generated",

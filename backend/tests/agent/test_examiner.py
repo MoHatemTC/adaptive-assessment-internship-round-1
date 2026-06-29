@@ -100,3 +100,22 @@ def test_examiner_routes_to_second_tool_when_first_done():
     state = _state(questions_done={"mcq": 2, "voice": 0})
     result = route_question(state)
     assert result["current_tool"] == "voice"
+
+
+def test_examiner_includes_code_time_limit_default():
+    blueprint = _blueprint()
+    blueprint["tools"]["code"] = {
+        "enabled": True,
+        "question_count": 2,
+        "min_difficulty": "beginner",
+        "max_difficulty": "advanced",
+        "time_limit_seconds": None,
+    }
+    state = _state(
+        blueprint=blueprint,
+        active_tools=["code"],
+        questions_done={"code": 0},
+        current_difficulty={"code": "beginner"},
+    )
+    result = route_question(state)
+    assert result["next_question"]["time_limit_seconds"] == 600
