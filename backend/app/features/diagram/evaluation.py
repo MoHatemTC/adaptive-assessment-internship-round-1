@@ -19,6 +19,7 @@ from app.features.diagram.models import (
     DiagramResponse,
     DiagramSkillDimension,
 )
+from app.shared.grading_persist import persist_grade_result, rubric_from_objective_score
 
 logger = get_logger(__name__)
 
@@ -61,6 +62,19 @@ async def evaluate_diagram_answer(
     score = response.score or 0.0
     passed = score >= 0.5
     rubric_scores = {"score": score, "dimension": dimension_value, "passed": passed}
+
+    await persist_grade_result(
+        db,
+        session_id=session_id,
+        tool_type="diagram",
+        tool_session_id=diagram_response_id,
+        question_index=question_index,
+        rubric_scores=rubric_from_objective_score(
+            score=score,
+            dimension=dimension_value,
+            feedback="Diagram response graded.",
+        ),
+    )
 
     difficulty_for_memory = DIFFICULTY_MAP.get(question.difficulty or "easy", "beginner")
 
