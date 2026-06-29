@@ -49,7 +49,14 @@ def extract_json(content: str) -> str:
 
 def parse_llm_json(content: str | list[object] | None) -> dict[str, Any]:
     """Parse JSON from raw or block-structured LLM output."""
-    text = extract_llm_text(content)
+    text = extract_llm_text(content).strip()
+    if text.startswith("```json"):
+        text = text.removeprefix("```json").strip()
+    if text.startswith("```"):
+        text = text.removeprefix("```").strip()
+    if text.endswith("```"):
+        text = text.removesuffix("```").strip()
+
     start = text.find("{")
     if start == -1:
         raise json.JSONDecodeError("No JSON object found", text, 0)
