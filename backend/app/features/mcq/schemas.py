@@ -88,12 +88,24 @@ class MCQNextQuestion(BaseModel):
 
 
 class MCQAnswerResponse(BaseModel):
-    """Learner-safe response for the adaptive answer endpoint.
-
-    Carries only the next question (if any) and a completion flag. It never
-    contains score, correctness, pass/fail, grading feedback, dimension scores,
-    or memory card contents.
-    """
+    """Learner-safe response for the adaptive answer endpoint."""
 
     next_question: Optional[MCQNextQuestion] = None
     is_complete: bool
+    status: str = "ready"
+    total_questions: Optional[int] = None
+
+
+class MCQStartResponse(BaseModel):
+    """First adaptive MCQ for a session (sync or async)."""
+
+    status: str
+    total_questions: int
+    question: Optional[MCQNextQuestion] = None
+
+
+class MCQPendingQuestionResponse(BaseModel):
+    status: str
+    total_questions: int
+    question: Optional[MCQNextQuestion] = None
+    error: Optional[str] = None
