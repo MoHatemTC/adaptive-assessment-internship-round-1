@@ -47,3 +47,18 @@ async def test_acompletion_vision_json_raises_on_provider_failure():
         mock_llm.side_effect = RuntimeError("503 unavailable")
         with pytest.raises(VisionGradingUnavailable):
             await acompletion_vision_json([{"role": "user", "content": "x"}])
+    assert mock_llm.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_acompletion_vision_json_does_not_retry_json_parse_failure():
+    mock_response = MagicMock()
+    mock_response.choices = [
+        MagicMock(message=MagicMock(content="The user wants me to analyze the frame..."))
+    ]
+
+    with patch("app.core.vision.litellm.acompletion", new_callable=AsyncMock) as mock_llm:
+        mock_llm.return_value = mock_response
+        with pytest.raises(json.JSONDecodeError):
+            await acompletion_vision_json([{"role": "user", "content": "x"}])
+    assert mock_llm.await_count == 1
