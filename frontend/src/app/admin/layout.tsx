@@ -2,12 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { adminLogin, getAdminToken, setAdminToken } from "@/lib/admin-api";
+import {
+  clearAdminToken,
+  isAdminTokenValid,
+} from "@/lib/admin-auth";
+import { adminLogin, setAdminToken } from "@/lib/admin-api";
+
+const SESSION_EXPIRED_MESSAGE = "Session expired — sign in again";
 
 /**
- * Admin area layout with a lightweight auth gate. When no admin JWT is present
- * it shows a sign-in form; otherwise it renders the admin pages. This keeps all
- * admin routes behind authentication without a dedicated login route.
+ * Admin area layout with a lightweight auth gate. When no valid admin JWT is
+ * present it shows a sign-in form; otherwise it renders the admin pages.
  */
 export default function AdminLayout({
   children,
@@ -21,7 +26,24 @@ export default function AdminLayout({
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    setAuthed(Boolean(getAdminToken()));
+    if (!isAdminTokenValid()) {
+      clearAdminToken();
+      setAuthed(false);
+      return;
+    }
+    setAuthed(true);
+  }, []);
+
+  useEffect(() => {
+    const onSessionExpired = () => {
+      clearAdminToken();
+      setAuthed(false);
+      setError(SESSION_EXPIRED_MESSAGE);
+    };
+    window.addEventListener("admin-session-expired", onSessionExpired);
+    return () => {
+      window.removeEventListener("admin-session-expired", onSessionExpired);
+    };
   }, []);
 
   const handleLogin = useCallback(

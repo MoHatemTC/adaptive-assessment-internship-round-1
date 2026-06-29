@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import uuid
 
+from datetime import timedelta
+
 import pytest
 
 from app.admin.models import Assessment
@@ -61,6 +63,20 @@ async def test_admin_login_rejects_bad_credentials(admin_db_client):
 async def test_list_assessments_requires_admin(admin_db_client):
     response = await admin_db_client.get("/api/v1/admin/assessments")
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_expired_admin_token_returns_401(admin_db_client):
+    token = create_access_token(
+        {"sub": "admin", "role": "admin"},
+        expires_delta=timedelta(minutes=-1),
+    )
+    response = await admin_db_client.get(
+        "/api/v1/admin/assessments",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Could not validate credentials."
 
 
 @pytest.mark.asyncio

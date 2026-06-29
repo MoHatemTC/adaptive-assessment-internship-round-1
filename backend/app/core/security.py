@@ -36,8 +36,8 @@ _logger = get_logger(__name__)
 #: JWT signing algorithm for admin access tokens.
 ALGORITHM = "HS256"
 
-#: Default admin access-token lifetime, in minutes.
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+#: Fallback admin access-token lifetime when settings are unavailable (minutes).
+_DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 #: Number of random bytes backing an opaque learner session token. 32 bytes of
 #: entropy is well beyond brute-force reach; ``token_urlsafe`` encodes them as a
@@ -90,14 +90,16 @@ def create_access_token(
         data: Claims to embed in the token (for example ``{"sub": admin_id}``).
             The mapping is copied, not mutated.
         expires_delta: Optional custom lifetime. Defaults to
-            :data:`ACCESS_TOKEN_EXPIRE_MINUTES` minutes.
+            ``ACCESS_TOKEN_EXPIRE_MINUTES`` from settings.
 
     Returns:
         The encoded, signed JWT string.
     """
     to_encode = data.copy()
+    settings = get_settings()
+    expire_minutes = settings.ACCESS_TOKEN_EXPIRE_MINUTES
     expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expires_delta or timedelta(minutes=expire_minutes)
     )
     to_encode["exp"] = expire
     secret_key = get_settings().SECRET_KEY.get_secret_value()
