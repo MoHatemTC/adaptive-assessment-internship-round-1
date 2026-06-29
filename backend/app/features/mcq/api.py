@@ -1,20 +1,19 @@
-"""FastAPI routes for the MCQ feature.
-
-Exposes three endpoints — create a question, fetch a question (without its
-answer), and submit an answer. Submission is silent: the response only
-acknowledges receipt and never reveals correctness or score. The router is
-named ``router`` so the application factory's auto-discovery registers it.
-"""
+"""FastAPI routes for the MCQ feature."""
 
 from typing import Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.deps import get_db
 from app.core.logging import get_logger
+from app.features.mcq.background_pipeline import (
+    async_pipeline_enabled,
+    schedule_mcq_post_answer,
+    schedule_mcq_start,
+)
 from app.features.mcq.llm_generation import generate_and_store_next_mcq
-from app.features.mcq.loop import run_mcq_loop
+from app.features.mcq.loop import run_mcq_loop, run_mcq_loop_fast
 from app.features.mcq.models import MCQResponse
 from app.features.mcq.schemas import (
     MCQAnswerRequest,
@@ -22,10 +21,19 @@ from app.features.mcq.schemas import (
     MCQCreateRequest,
     MCQNextOption,
     MCQNextQuestion,
+    MCQPendingQuestionResponse,
     MCQQuestionResponse,
+    MCQStartResponse,
     MCQSubmitRequest,
     MCQSubmitResponse,
 )
+from app.features.mcq.session_blueprint import mcq_blueprint_context
+from app.features.mcq.session_cache import (
+    consume_mcq_ready,
+    get_mcq_cache,
+    set_mcq_generating,
+)
+from app.shared.async_question_cache import generation_is_stale, generation_should_schedule
 from app.features.mcq.service import (
     build_submit_response,
     create_question,
@@ -34,23 +42,42 @@ from app.features.mcq.service import (
     grade_answer,
     normalize_option_id,
 )
+from app.sessions.models import AssessmentSession
 
 _logger = get_logger(__name__)
 
 router = APIRouter(prefix="/mcq", tags=["mcq"])
 
 
+def _serialize_generated(generated: dict) -> MCQNextQuestion:
+    return MCQNextQuestion(
+        id=generated["id"],
+        question_text=generated["question_text"],
+        difficulty=generated["difficulty"],
+        dimension=generated.get("dimension"),
+        options=[
+            MCQNextOption(label=o["label"], text=o["text"])
+            for o in generated["options"]
+        ],
+    )
+
+
+def _pending_from_cache(
+  cache: dict,
+) -> MCQPendingQuestionResponse:
+    question = cache.get("question")
+    error = cache.get("error")
+    return MCQPendingQuestionResponse(
+        status=str(cache.get("status", "idle")),
+        total_questions=int(cache.get("total_questions") or 1),
+        question=_serialize_generated(question) if isinstance(question, dict) else None,
+        error=str(error) if isinstance(error, str) and error else None,
+    )
+
+
 @router.get("/health")
 def mcq_health_check() -> Dict[str, str]:
-    """Report that the MCQ feature is ready.
-
-    Returns:
-        A small status payload identifying the feature.
-    """
-    return {
-        "status": "ready",
-        "feature": "mcq",
-    }
+    return {"status": "ready", "feature": "mcq"}
 
 
 @router.post("/questions", response_model=MCQQuestionResponse)
@@ -58,15 +85,6 @@ async def create_mcq_question(
     payload: MCQCreateRequest,
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, object]:
-    """Create an MCQ question and return it without the correct answer.
-
-    Args:
-        payload: Question text, difficulty, correct option, and options.
-        db: Async database session dependency.
-
-    Returns:
-        The created question serialized without ``correct_option``.
-    """
     return await create_question(
         db=db,
         question_text=payload.question_text,
@@ -81,18 +99,6 @@ async def get_mcq_question(
     question_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, object]:
-    """Return an MCQ question without exposing the correct answer.
-
-    Args:
-        question_id: Primary key of the question to fetch.
-        db: Async database session dependency.
-
-    Returns:
-        The question serialized without ``correct_option``.
-
-    Raises:
-        HTTPException: 404 if the question does not exist.
-    """
     return await get_question(db=db, question_id=question_id)
 
 
@@ -101,21 +107,6 @@ async def submit_mcq_answer(
     payload: MCQSubmitRequest,
     db: AsyncSession = Depends(get_db),
 ) -> MCQSubmitResponse:
-    """Submit, silently grade, and persist an MCQ answer.
-
-    Grading is silent: the response only acknowledges receipt. Correctness and
-    score are persisted server-side but never returned to the learner.
-
-    Args:
-        payload: Question id, session id, selected option, and optional learner.
-        db: Async database session dependency.
-
-    Returns:
-        A silent acknowledgement carrying only ``received`` and ``question_id``.
-
-    Raises:
-        HTTPException: 404 if the question does not exist.
-    """
     await build_submit_response(
         db=db,
         question_id=payload.question_id,
@@ -124,6 +115,97 @@ async def submit_mcq_answer(
         learner_id=payload.learner_id,
     )
     return MCQSubmitResponse(received=True, question_id=payload.question_id)
+
+
+@router.get(
+    "/sessions/{session_id}/pending-question",
+    response_model=MCQPendingQuestionResponse,
+)
+async def get_pending_mcq_question(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> MCQPendingQuestionResponse:
+    """Poll for the next learner-safe MCQ after async generation."""
+    from app.proctoring.enforcement import ensure_tool_session_allowed
+
+    await ensure_tool_session_allowed(db, session_id)
+    session = await db.get(AssessmentSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
+
+    cache = get_mcq_cache(session)
+    if cache.get("status") == "ready" and cache.get("question"):
+        consumed = consume_mcq_ready(session)
+        await db.commit()
+        if consumed and consumed.get("question"):
+            return MCQPendingQuestionResponse(
+                status="ready",
+                total_questions=int(consumed.get("total_questions") or 1),
+                question=_serialize_generated(consumed["question"]),
+            )
+    return _pending_from_cache(cache)
+
+
+@router.post(
+    "/sessions/{session_id}/start",
+    response_model=MCQStartResponse,
+)
+async def start_adaptive_mcq_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> MCQStartResponse:
+    """Kick off first-question generation; poll pending-question until ready."""
+    from app.proctoring.enforcement import ensure_tool_session_allowed
+
+    await ensure_tool_session_allowed(db, session_id)
+    try:
+        session, blueprint, total_questions, profile = await mcq_blueprint_context(
+            db, session_id
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    cache = get_mcq_cache(session)
+    if cache.get("status") == "ready" and cache.get("question"):
+        consumed = consume_mcq_ready(session)
+        await db.commit()
+        if consumed and consumed.get("question"):
+            return MCQStartResponse(
+                status="ready",
+                total_questions=int(consumed.get("total_questions") or total_questions),
+                question=_serialize_generated(consumed["question"]),
+            )
+
+    if not async_pipeline_enabled():
+        generated = await generate_and_store_next_mcq(
+            db=db,
+            next_plan={"next_question_index": 0, "memory_summary": ""},
+            learner_profile=profile,
+            admin_config=blueprint,
+        )
+        await db.commit()
+        return MCQStartResponse(
+            status="ready",
+            total_questions=total_questions,
+            question=_serialize_generated(generated),
+        )
+
+    if generation_should_schedule(cache):
+        set_mcq_generating(session, total_questions=total_questions, for_index=0)
+        await db.commit()
+        schedule_mcq_start(
+            session_id=session_id,
+            force=generation_is_stale(cache),
+        )
+
+    return MCQStartResponse(
+        status="generating",
+        total_questions=total_questions,
+        question=None,
+    )
 
 
 @router.post(
@@ -135,30 +217,20 @@ async def submit_adaptive_mcq_answer(
     payload: MCQAnswerRequest,
     db: AsyncSession = Depends(get_db),
 ) -> MCQAnswerResponse:
-    """Submit an adaptive MCQ answer, grade it silently, and return the next item.
+    from app.proctoring.enforcement import ensure_tool_session_allowed
 
-    Persists the answer, runs the adaptive loop (silent grading + memory card
-    extraction), and — unless the assessment is complete — generates and stores
-    the next question. The response is learner-safe: it contains only the next
-    question (label/text options, no answer key) and ``is_complete``. It never
-    carries score, correctness, pass/fail, grading feedback, dimension scores, or
-    memory card contents.
+    await ensure_tool_session_allowed(db, session_id)
+    try:
+        session, blueprint, total_questions, profile = await mcq_blueprint_context(
+            db, session_id
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
 
-    Args:
-        session_id: Platform assessment session UUID from the path.
-        payload: The answered question, selected option label, position, and
-            optional generation context.
-        db: Async database session dependency.
-
-    Returns:
-        A :class:`MCQAnswerResponse` with the next question (or ``None``) and the
-        completion flag.
-
-    Raises:
-        HTTPException: 404 if the answered question does not exist.
-    """
-    # Persist the answer. ``is_correct`` is required (non-null); the float
-    # ``score`` is left NULL here and set by the evaluation layer inside the loop.
+    question_budget = total_questions
     correct_option = await get_correct_option(db=db, question_id=payload.question_id)
     grading = grade_answer(
         correct_option=correct_option,
@@ -176,16 +248,53 @@ async def submit_adaptive_mcq_answer(
     await db.flush()
     mcq_response_id = response.id
 
-    # Adaptive loop: grade silently, persist score/feedback, extract memory card.
+    if async_pipeline_enabled():
+        loop_result = await run_mcq_loop_fast(
+            session_id=session_id,
+            question_index=payload.question_index,
+            mcq_response_id=mcq_response_id,
+            total_questions=question_budget,
+            db=db,
+        )
+        is_complete = loop_result["is_complete"]
+        await db.refresh(session)
+        await db.commit()
+
+        if not is_complete:
+            set_mcq_generating(
+                session,
+                total_questions=question_budget,
+                for_index=payload.question_index + 1,
+            )
+            await db.commit()
+            schedule_mcq_post_answer(
+                session_id=session_id,
+                question_index=payload.question_index,
+                mcq_response_id=mcq_response_id,
+                total_questions=question_budget,
+            )
+            return MCQAnswerResponse(
+                next_question=None,
+                is_complete=False,
+                status="generating",
+                total_questions=question_budget,
+            )
+
+        return MCQAnswerResponse(
+            next_question=None,
+            is_complete=True,
+            status="ready",
+            total_questions=question_budget,
+        )
+
     loop_result = await run_mcq_loop(
         session_id=session_id,
         question_index=payload.question_index,
         mcq_response_id=mcq_response_id,
-        total_questions=payload.total_questions,
+        total_questions=question_budget,
         db=db,
     )
     is_complete = loop_result["is_complete"]
-
     next_question: MCQNextQuestion | None = None
     if not is_complete:
         next_plan = {
@@ -196,21 +305,17 @@ async def submit_adaptive_mcq_answer(
             generated = await generate_and_store_next_mcq(
                 db=db,
                 next_plan=next_plan,
-                learner_profile=payload.learner_profile,
-                admin_config=payload.admin_config,
+                learner_profile=profile,
+                admin_config=blueprint,
             )
-            next_question = MCQNextQuestion(
-                id=generated["id"],
-                question_text=generated["question_text"],
-                difficulty=generated["difficulty"],
-                dimension=generated.get("dimension"),
-                options=[
-                    MCQNextOption(label=o["label"], text=o["text"])
-                    for o in generated["options"]
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001 - generation must not break the flow
+            next_question = _serialize_generated(generated)
+        except Exception as exc:  # noqa: BLE001
             _logger.error("mcq_next_generation_failed", error=str(exc))
-            next_question = None
 
-    return MCQAnswerResponse(next_question=next_question, is_complete=is_complete)
+    await db.commit()
+    return MCQAnswerResponse(
+        next_question=next_question,
+        is_complete=is_complete,
+        status="ready",
+        total_questions=question_budget,
+    )
