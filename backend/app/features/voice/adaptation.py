@@ -20,8 +20,19 @@ logger = get_logger(__name__)
 #: Difficulty tiers in ascending order; index arithmetic drives selection.
 _DIFFICULTY_ORDER: list[DifficultyLevel] = ["beginner", "intermediate", "advanced"]
 
-#: Default voice question budget; the contract stops once it is exhausted.
+#: Default voice question budget when blueprint/admin config omits a count.
 _MAX_VOICE_QUESTIONS = 10
+
+
+def _voice_question_budget(admin_config: dict[str, Any] | None) -> int:
+    """Resolve the voice tool question cap from admin/blueprint config."""
+    cfg = admin_config or {}
+    for key in ("max_questions", "question_count"):
+        value = cfg.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    return _MAX_VOICE_QUESTIONS
+
 
 #: Preset questions used when LLM generation fails, keyed by difficulty.
 _FALLBACKS = {
@@ -231,6 +242,7 @@ async def build_voice_adaptive_contract(
     next_difficulty: str,
     follow_up_depth: str,
     memory_summary: str,
+    admin_config: dict[str, Any] | None = None,
 ) -> AdaptiveContract:
     """Assemble the adaptive contract for the next loop iteration.
 
@@ -247,7 +259,7 @@ async def build_voice_adaptive_contract(
         The :class:`~app.shared.schemas.memory.AdaptiveContract` for the next
         question, with ``stop`` set once the question budget is exhausted.
     """
-    stop = current_question_index >= _MAX_VOICE_QUESTIONS - 1
+    stop = current_question_index >= _voice_question_budget(admin_config) - 1
     return AdaptiveContract(
         session_id=session_id,
         question_index=current_question_index + 1,

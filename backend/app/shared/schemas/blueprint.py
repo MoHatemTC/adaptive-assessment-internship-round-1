@@ -53,6 +53,7 @@ class Blueprint(BaseModel):
         skill_dimensions: Subset of
             ``thinking``/``soft``/``work``/``digital_ai``/``growth``.
         total_questions: Sum of ``question_count`` across all enabled tools.
+        session_time_limit_seconds: Optional whole-sitting time budget in seconds.
     """
 
     title: str
@@ -60,6 +61,7 @@ class Blueprint(BaseModel):
     tools: dict[str, ToolBlueprint]
     skill_dimensions: list[str]
     total_questions: int
+    session_time_limit_seconds: int | None = None
 
     def enabled_tools(self) -> list[str]:
         """Return enabled tool names in serving order: mcq, voice, diagram, code.

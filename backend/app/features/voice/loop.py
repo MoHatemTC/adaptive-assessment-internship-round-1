@@ -86,6 +86,7 @@ async def run_voice_adaptive_loop(
         next_difficulty=next_difficulty,
         follow_up_depth=follow_up_depth,
         memory_summary=memory_summary,
+        admin_config=input_data.admin_config,
     )
 
     # Embed the contract plus the generated question into the output.
