@@ -129,9 +129,9 @@ export function SessionRadarReportView({
         <section>
           <h3 className="text-sm font-semibold text-neutral">Evidence highlights</h3>
           <ul className="mt-2 space-y-2 text-sm text-neutral/80">
-            {report.evidence_highlights.map((item) => (
+            {report.evidence_highlights.map((item, index) => (
               <li
-                key={item}
+                key={`evidence-${index}`}
                 className="rounded-lg border border-border bg-white px-3 py-2"
               >
                 {item}

@@ -87,3 +87,50 @@ async def test_build_session_radar_report_aggregates_scores_and_memory():
     assert report.integrity is not None
     assert report.integrity.verification_status == "pending"
     assert report.integrity.identity_verified is False
+
+
+@pytest.mark.asyncio
+async def test_build_session_radar_report_dedupes_evidence_highlights():
+    session_id = str(uuid.uuid4())
+    assessment_id = str(uuid.uuid4())
+    duplicate = "Submission passed with sandbox correctness 100%."
+
+    async with async_session() as db:
+        db.add(
+            Assessment(
+                id=assessment_id,
+                title="Report Test",
+                prompt="x",
+                blueprint_json="{}",
+                tool_config="{}",
+                status="active",
+            )
+        )
+        db.add(
+            AssessmentSession(
+                id=session_id,
+                assessment_id=assessment_id,
+                learner_profile_json=json.dumps({"name": "Learner"}),
+                status="completed",
+                token_hash=hash_token(generate_session_token()),
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                completed_at=datetime.now(timezone.utc),
+            )
+        )
+        for index in range(3):
+            db.add(
+                MemoryCard(
+                    session_id=session_id,
+                    tool_type="coding",
+                    question_index=index,
+                    difficulty="beginner",
+                    evidence_summary=duplicate,
+                    dimension_signals="{}",
+                    passed=True,
+                )
+            )
+        await db.flush()
+
+        report = await build_session_radar_report(db, session_id)
+
+    assert report.evidence_highlights == [duplicate]
