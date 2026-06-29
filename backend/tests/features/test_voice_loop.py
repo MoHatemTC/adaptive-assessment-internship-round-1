@@ -243,21 +243,27 @@ def _build_test_app() -> FastAPI:
 async def test_start_adaptive_session_endpoint_201():
     app = _build_test_app()
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.post(
-            "/voice/adaptive/sessions",
-            json={
-                "session_id": "adaptive-session-1",
-                "question_text": "Tell me about a recent project.",
-                "question_index": 0,
-                "time_limit_seconds": 60,
-                "target_difficulty": "intermediate",
-                "learner_profile": {},
-                "admin_config": {},
-            },
-        )
+    # Proctoring readiness is enforced separately; isolate the start-endpoint
+    # contract here with a mocked, fully-async test DB.
+    with patch(
+        "app.proctoring.enforcement.ensure_tool_session_allowed",
+        new=AsyncMock(return_value=None),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/voice/adaptive/sessions",
+                json={
+                    "session_id": "adaptive-session-1",
+                    "question_text": "Tell me about a recent project.",
+                    "question_index": 0,
+                    "time_limit_seconds": 60,
+                    "target_difficulty": "intermediate",
+                    "learner_profile": {},
+                    "admin_config": {},
+                },
+            )
 
     assert response.status_code == 200
     body = response.json()

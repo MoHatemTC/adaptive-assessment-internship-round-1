@@ -12,6 +12,7 @@ from app.admin.models import Assessment
 from app.core.database import async_session, engine
 from app.features.code import adaptation, grading, loop, service
 from app.features.code.models import CodeChallenge, CodeSubmission, SubmissionStatus
+from app.proctoring.models import ProctoringEvent
 from app.sessions.models import (
     AssessmentSession,
     GradeResult,
@@ -199,8 +200,17 @@ async def test_adaptive_submit_async_schedules_llm_upgrade(monkeypatch):
                 AssessmentSession(
                     id=session_id,
                     assessment_id=assessment_id,
-                    learner_profile_json=json.dumps({"level": "junior"}),
+                    learner_profile_json=json.dumps(
+                        {"level": "junior", "consent_given": True}
+                    ),
                     status="active",
+                )
+            )
+            db.add(
+                ProctoringEvent(
+                    session_id=session_id,
+                    event_type="identity_verified",
+                    severity="low",
                 )
             )
             challenge = CodeChallenge(
@@ -268,8 +278,17 @@ async def test_adaptive_submit_is_idempotent_for_identical_retry(monkeypatch):
                 AssessmentSession(
                     id=session_id,
                     assessment_id=assessment_id,
-                    learner_profile_json=json.dumps({"level": "junior"}),
+                    learner_profile_json=json.dumps(
+                        {"level": "junior", "consent_given": True}
+                    ),
                     status="active",
+                )
+            )
+            db.add(
+                ProctoringEvent(
+                    session_id=session_id,
+                    event_type="identity_verified",
+                    severity="low",
                 )
             )
             challenge = CodeChallenge(
@@ -453,6 +472,76 @@ async def test_adaptation_uses_admin_thresholds_and_max_questions():
             )
 
             assert contract.difficulty == "intermediate"
+            assert contract.stop is True
+            assert contract.question_index == 2
+            await db.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_adaptation_stops_at_planner_question_count():
+    session_id = str(uuid.uuid4())
+    assessment_id = str(uuid.uuid4())
+    try:
+        async with async_session() as db:
+            db.add(
+                Assessment(
+                    id=assessment_id,
+                    title="Coding",
+                    prompt="Assess coding ability.",
+                    blueprint_json=json.dumps(
+                        {
+                            "tools": {
+                                "code": {
+                                    "question_count": 2,
+                                    "dimensions": ["thinking", "work"],
+                                }
+                            },
+                            "total_questions": 2,
+                        }
+                    ),
+                    tool_config=json.dumps({"code": True}),
+                    status="active",
+                )
+            )
+            db.add(
+                AssessmentSession(
+                    id=session_id,
+                    assessment_id=assessment_id,
+                    learner_profile_json=json.dumps({"consent_given": True}),
+                    status="active",
+                )
+            )
+            await db.flush()
+            db.add_all(
+                [
+                    SkillDimensionScore(
+                        session_id=session_id,
+                        question_index=0,
+                        tool_type="coding",
+                        thinking=4,
+                        work=4,
+                        digital_ai=4,
+                    ),
+                    SkillDimensionScore(
+                        session_id=session_id,
+                        question_index=1,
+                        tool_type="coding",
+                        thinking=4,
+                        work=4,
+                        digital_ai=4,
+                    ),
+                ]
+            )
+            await db.flush()
+
+            contract = await adaptation.compute_adaptive_contract(
+                db,
+                session_id,
+                assessment_id,
+            )
+
             assert contract.stop is True
             assert contract.question_index == 2
             await db.rollback()
