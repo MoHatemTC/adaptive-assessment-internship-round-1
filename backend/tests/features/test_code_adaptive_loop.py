@@ -477,3 +477,73 @@ async def test_adaptation_uses_admin_thresholds_and_max_questions():
             await db.rollback()
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_adaptation_stops_at_planner_question_count():
+    session_id = str(uuid.uuid4())
+    assessment_id = str(uuid.uuid4())
+    try:
+        async with async_session() as db:
+            db.add(
+                Assessment(
+                    id=assessment_id,
+                    title="Coding",
+                    prompt="Assess coding ability.",
+                    blueprint_json=json.dumps(
+                        {
+                            "tools": {
+                                "code": {
+                                    "question_count": 2,
+                                    "dimensions": ["thinking", "work"],
+                                }
+                            },
+                            "total_questions": 2,
+                        }
+                    ),
+                    tool_config=json.dumps({"code": True}),
+                    status="active",
+                )
+            )
+            db.add(
+                AssessmentSession(
+                    id=session_id,
+                    assessment_id=assessment_id,
+                    learner_profile_json=json.dumps({"consent_given": True}),
+                    status="active",
+                )
+            )
+            await db.flush()
+            db.add_all(
+                [
+                    SkillDimensionScore(
+                        session_id=session_id,
+                        question_index=0,
+                        tool_type="coding",
+                        thinking=4,
+                        work=4,
+                        digital_ai=4,
+                    ),
+                    SkillDimensionScore(
+                        session_id=session_id,
+                        question_index=1,
+                        tool_type="coding",
+                        thinking=4,
+                        work=4,
+                        digital_ai=4,
+                    ),
+                ]
+            )
+            await db.flush()
+
+            contract = await adaptation.compute_adaptive_contract(
+                db,
+                session_id,
+                assessment_id,
+            )
+
+            assert contract.stop is True
+            assert contract.question_index == 2
+            await db.rollback()
+    finally:
+        await engine.dispose()

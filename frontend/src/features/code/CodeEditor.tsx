@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   CodeConsolePanel,
@@ -33,6 +33,8 @@ export interface CodeEditorProps {
   difficulty: DifficultyLevel;
   disabled?: boolean;
   onSubmitted?: (result: { contract: AdaptiveContract }) => void;
+  /** Called once on mount so parent can trigger submit when the timer expires. */
+  registerAutoSubmit?: (submit: () => void) => void;
 }
 
 export function CodeEditor({
@@ -43,6 +45,7 @@ export function CodeEditor({
   difficulty,
   disabled = false,
   onSubmitted,
+  registerAutoSubmit,
 }: CodeEditorProps) {
   const [code, setCode] = useState(challenge.starter_code);
   const [runningTests, setRunningTests] = useState(false);
@@ -144,6 +147,12 @@ export function CodeEditor({
     questionIndex,
     sessionId,
   ]);
+
+  useEffect(() => {
+    registerAutoSubmit?.(() => {
+      void handleSubmit();
+    });
+  }, [handleSubmit, registerAutoSubmit]);
 
   return (
     <section className="flex min-h-[420px] w-full flex-[1.5] flex-col gap-sm lg:sticky lg:top-[88px] lg:h-[calc(100vh-140px)]">
