@@ -18,6 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.admin.models import Assessment
 from app.core.logging import get_logger
 from app.sessions.models import AssessmentSession, SkillDimensionScore
+from app.shared.blueprint_utils import tool_question_count
 from app.shared.memory_retrieval import enrich_memory_summary_for_adaptation
 from app.shared.schemas.memory import (
     AdaptiveContract,
@@ -118,7 +119,9 @@ def _policy_from_config(
     )
 
     max_questions = (
-        _optional_int_setting(coding_blueprint, "max_questions")
+        tool_question_count(blueprint, "code", legacy_keys=("coding", "code"))
+        or _optional_int_setting(coding_blueprint, "max_questions")
+        or _optional_int_setting(coding_blueprint, "question_count")
         or _optional_int_setting(adaptive_blueprint, "max_questions")
         or _optional_int_setting(coding_tool_config, "max_questions")
     )
