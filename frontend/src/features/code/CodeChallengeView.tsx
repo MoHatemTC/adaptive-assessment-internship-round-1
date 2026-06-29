@@ -1,8 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CodeEditor } from "@/features/code/CodeEditor";
+import { CodeQuestionPanel } from "@/features/code/CodeQuestionPanel";
+import {
+  formatQuestionTimer,
+  useQuestionTimer,
+} from "@/hooks/useQuestionTimer";
 import {
   generateCodeChallenge,
   listCodeLanguages,
@@ -26,6 +31,10 @@ export interface CodeChallengeViewProps {
   initialChallengeId?: number;
   initialSessionId?: string;
   assessmentId?: string;
+  /** Blueprint question budget for this tool (from examiner next_tool_info). */
+  maxQuestions?: number;
+  /** Per-question time budget in seconds (from blueprint / examiner). */
+  questionTimeLimitSeconds?: number;
   /** Enable browser + camera integrity monitoring for the session. */
   enableProctoring?: boolean;
   /** Consent was collected before the assessment (required for camera/mic). */
@@ -44,6 +53,8 @@ export function CodeChallengeView({
   initialChallengeId,
   initialSessionId,
   assessmentId = DEFAULT_ASSESSMENT_ID,
+  maxQuestions,
+  questionTimeLimitSeconds = 600,
   enableProctoring = false,
   proctoringConsentGiven = false,
   referenceImageB64,
@@ -63,6 +74,24 @@ export function CodeChallengeView({
   const [sessionEnded, setSessionEnded] = useState(false);
   const [endReason, setEndReason] = useState<"learner" | "adaptive" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const autoSubmitRef = useRef<(() => void) | null>(null);
+  const registerAutoSubmit = useCallback((submit: () => void) => {
+    autoSubmitRef.current = submit;
+  }, []);
+
+  const timerResetKey = challenge
+    ? `${challenge.id}-${questionIndex}`
+    : questionIndex;
+  const { secondsRemaining, expired: timeExpired } = useQuestionTimer(
+    questionTimeLimitSeconds,
+    timerResetKey,
+    {
+      enabled: sessionStarted && !sessionEnded && Boolean(challenge),
+      armed: Boolean(challenge) && !loading && !generatingNext,
+      paused: loading || generatingNext,
+      onExpired: () => autoSubmitRef.current?.(),
+    },
+  );
 
   const loadGeneratedChallenge = useCallback(
     async (contract?: AdaptiveContract | null) => {
@@ -122,6 +151,12 @@ export function CodeChallengeView({
     }
   }, [loadGeneratedChallenge]);
 
+  // Platform examiner flow: auto-start when wired to an existing session.
+  useEffect(() => {
+    if (!initialSessionId || sessionStarted || sessionEnded) return;
+    void beginSession();
+  }, [beginSession, initialSessionId, sessionEnded, sessionStarted]);
+
   const startNewSession = useCallback(() => {
     if (initialSessionId) {
       setChallenge(null);
@@ -171,14 +206,17 @@ export function CodeChallengeView({
   const handleSubmitted = useCallback(
     async ({ contract }: { contract: AdaptiveContract }) => {
       setActiveContract(contract);
-      setQuestionsAnswered(contract.question_index);
-      if (contract.stop) {
+      const answered = contract.question_index;
+      setQuestionsAnswered(answered);
+      const reachedLimit =
+        maxQuestions != null && maxQuestions > 0 && answered >= maxQuestions;
+      if (contract.stop || reachedLimit) {
         setSessionEnded(true);
         setEndReason("adaptive");
         setChallenge(null);
         onSessionComplete?.({
           reason: "adaptive",
-          questionsAnswered: contract.question_index,
+          questionsAnswered: answered,
           sessionId,
           assessmentId,
         });
@@ -194,12 +232,12 @@ export function CodeChallengeView({
         setGeneratingNext(false);
       }
     },
-    [assessmentId, loadGeneratedChallenge, onSessionComplete, sessionId],
+    [assessmentId, loadGeneratedChallenge, maxQuestions, onSessionComplete, sessionId],
   );
 
   const sessionLabel = useMemo(() => sessionId.slice(0, 8), [sessionId]);
 
-  if (!sessionStarted && !sessionEnded && initialChallengeId == null) {
+  if (!sessionStarted && !sessionEnded && initialChallengeId == null && !initialSessionId) {
     return (
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
         <header className="space-y-1">
@@ -284,9 +322,29 @@ export function CodeChallengeView({
       </header>
 
       {activeContract && !sessionEnded && (
-        <div className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-neutral/80">
-          Question {questionIndex + 1} ·{" "}
-          <span className="font-medium capitalize">{difficulty}</span>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-surface-muted p-3 text-sm text-neutral/80">
+          <span>
+            Question {questionIndex + 1}
+            {maxQuestions != null && maxQuestions > 0
+              ? ` of ${maxQuestions}`
+              : null}{" "}
+            · <span className="font-medium capitalize">{difficulty}</span>
+          </span>
+          {secondsRemaining != null ? (
+            <span
+              className={`inline-flex items-center gap-1 font-medium tabular-nums ${
+                timeExpired || secondsRemaining <= 60
+                  ? "text-error"
+                  : "text-neutral"
+              }`}
+              aria-live="polite"
+            >
+              <span className="material-symbols-outlined text-[18px]">timer</span>
+              {timeExpired
+                ? "Time's up"
+                : formatQuestionTimer(secondsRemaining)}
+            </span>
+          ) : null}
         </div>
       )}
 
@@ -312,16 +370,20 @@ export function CodeChallengeView({
       )}
 
       {challenge && !sessionEnded && (
-        <CodeEditor
-          key={`${sessionId}-${challenge.id}-${questionIndex}-${difficulty}`}
-          challenge={challenge}
-          sessionId={sessionId}
-          assessmentId={assessmentId}
-          questionIndex={questionIndex}
-          difficulty={difficulty}
-          onSubmitted={handleSubmitted}
-          disabled={generatingNext}
-        />
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+          <CodeQuestionPanel challenge={challenge} difficulty={difficulty} />
+          <CodeEditor
+            key={`${sessionId}-${challenge.id}-${questionIndex}-${difficulty}`}
+            challenge={challenge}
+            sessionId={sessionId}
+            assessmentId={assessmentId}
+            questionIndex={questionIndex}
+            difficulty={difficulty}
+            onSubmitted={handleSubmitted}
+            disabled={generatingNext || timeExpired}
+            registerAutoSubmit={registerAutoSubmit}
+          />
+        </div>
       )}
 
       {sessionEnded && (

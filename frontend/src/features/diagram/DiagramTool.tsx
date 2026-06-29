@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+import { pollDiagramPendingQuestion } from "@/hooks/useQuestionTimer";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
@@ -21,6 +23,7 @@ interface DiagramToolProps {
   sessionId: string;
   onComplete: () => void;
   onNext: (nextQuestion: DiagramNextQuestion) => void;
+  onBusyChange?: (busy: boolean) => void;
 }
 
 export default function DiagramTool({
@@ -32,12 +35,17 @@ export default function DiagramTool({
   sessionId,
   onComplete,
   onNext,
+  onBusyChange,
 }: DiagramToolProps) {
   const [phase, setPhase] = useState<"diagram" | "question" | "submitting">(
     "diagram"
   );
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onBusyChange?.(phase === "submitting");
+  }, [onBusyChange, phase]);
 
   const handleSubmit = async () => {
     if (!answer.trim() || phase === "submitting") return;
@@ -59,13 +67,21 @@ export default function DiagramTool({
       const data: {
         next_question: DiagramNextQuestion | null;
         is_complete: boolean;
+        status?: string;
       } = await res.json();
 
-      if (data.is_complete || !data.next_question) {
+      if (data.is_complete) {
         onComplete();
-      } else {
-        onNext(data.next_question);
+        return;
       }
+
+      if (data.status === "generating" || !data.next_question) {
+        const pending = await pollDiagramPendingQuestion(API_BASE, sessionId);
+        onNext(pending.question);
+        return;
+      }
+
+      onNext(data.next_question);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setPhase("question");
@@ -158,6 +174,11 @@ export default function DiagramTool({
           "Submit Answer"
         )}
       </button>
+      {phase === "submitting" && (
+        <p className="mt-2 text-xs text-[#606575]">
+          Answer saved — preparing your next diagram…
+        </p>
+      )}
     </section>
   );
 }
