@@ -61,6 +61,17 @@ def _include_router(app: FastAPI, module_path: str) -> None:
     """
     try:
         module = import_module(module_path)
+    except ModuleNotFoundError as exc:
+        # A feature package that exposes no ``api`` submodule (e.g. tool-only
+        # packages) is expected, not an error. A *transitive* missing import
+        # inside an existing api module is a real problem and stays a warning.
+        if exc.name == module_path:
+            _logger.info("router_module_absent", module=module_path)
+        else:
+            _logger.warning(
+                "router_import_failed", module=module_path, error=str(exc)
+            )
+        return
     except Exception as exc:  # noqa: BLE001 - discovery must tolerate any error
         _logger.warning("router_import_failed", module=module_path, error=str(exc))
         return
