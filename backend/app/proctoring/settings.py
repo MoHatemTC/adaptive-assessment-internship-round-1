@@ -38,6 +38,10 @@ class ProctoringSettings(BaseSettings):
     HF_FACE_MODEL_FILE: str = "arcface.onnx"
     FACE_MATCH_THRESHOLD: float = 0.7
     PROCTORING_HIGH_SEVERITY_THRESHOLD: int = 3
+    PROCTORING_CANDIDATE_ABSENCE_GRACE_SECONDS: float = 5.0
+    # Reasoning VLMs (e.g. Kimi K2.6) spend tokens on chain-of-thought before
+    # emitting the JSON verdict; too small a budget truncates the JSON entirely.
+    PROCTORING_VLM_MAX_TOKENS: int = 2048
 
     @property
     def face_api_configured(self) -> bool:
