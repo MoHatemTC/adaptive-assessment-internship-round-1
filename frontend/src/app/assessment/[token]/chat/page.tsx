@@ -4,10 +4,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
+import { AssessmentTimerShell } from "@/features/assessment/AssessmentTimerShell";
 import { CodeChallengeView } from "@/features/code/CodeChallengeView";
+import DiagramTool, {
+  type DiagramNextQuestion,
+} from "@/features/diagram/DiagramTool";
 import { SessionProctoringShell } from "@/features/proctoring";
 import AdaptiveVoiceSession from "@/features/voice/AdaptiveVoiceSession";
 import McqCard, { McqOption } from "@/features/mcq/McqCard";
+import {
+  formatQuestionTimer,
+  pollDiagramPendingQuestion,
+  pollMcqPendingQuestion,
+  useQuestionTimer,
+} from "@/hooks/useQuestionTimer";
 import {
   NextToolInfo,
   completeSession,
@@ -17,12 +27,6 @@ import { readIdentityReference, readSessionAuth } from "@/lib/session-storage";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
-/**
- * Examiner chat router. The examiner is routing-only (it sequences *tools*),
- * while each tool widget runs its own internal question loop. When a tool
- * finishes, we advance the examiner with action="complete_tool" until the
- * assessment is complete. No scores are ever shown.
- */
 export default function AssessmentChatPage() {
   const router = useRouter();
   const params = useParams<{ token: string }>();
@@ -37,6 +41,7 @@ export default function AssessmentChatPage() {
   const [toolInfo, setToolInfo] = useState<NextToolInfo | null>(null);
   const [isComplete, setIsComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toolLoading, setToolLoading] = useState(false);
   const started = useRef(false);
 
   const completeHref = useMemo(() => {
@@ -46,7 +51,6 @@ export default function AssessmentChatPage() {
       : `/assessment/${token}/complete`;
   }, [sessionId, search, token]);
 
-  // Resolve session credentials, then ask the examiner for the first tool.
   useEffect(() => {
     if (started.current) return;
     started.current = true;
@@ -118,7 +122,7 @@ export default function AssessmentChatPage() {
     );
   }
 
-  if (!currentTool || !sessionId) {
+  if (!currentTool || !sessionId || !accessToken) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-surface px-4">
         <p className="text-sm text-[#1F2430]/70">Preparing your assessment…</p>
@@ -130,12 +134,18 @@ export default function AssessmentChatPage() {
     <main className="min-h-screen bg-surface px-4 py-8">
       <SessionProctoringShell
         sessionId={sessionId}
-        accessToken={accessToken ?? undefined}
+        accessToken={accessToken}
         manageLifecycle={false}
         enabled
         consentGiven={Boolean(referenceImageB64)}
         referenceImageB64={referenceImageB64 ?? undefined}
       >
+        <AssessmentTimerShell
+          sessionId={sessionId}
+          accessToken={accessToken}
+          paused={toolLoading}
+        />
+
         <div className="mx-auto mb-6 w-full max-w-2xl">
           <p className="text-sm font-medium capitalize text-[#1F2430]">
             {currentTool} section
@@ -146,6 +156,8 @@ export default function AssessmentChatPage() {
           <CodeChallengeView
             initialSessionId={sessionId}
             assessmentId={token}
+            maxQuestions={toolInfo?.total_for_tool}
+            questionTimeLimitSeconds={toolInfo?.time_limit_seconds ?? 600}
             onSessionComplete={() => advance("code")}
           />
         )}
@@ -159,7 +171,10 @@ export default function AssessmentChatPage() {
               "beginner"
             }
             learnerProfile={{}}
-            adminConfig={{ max_difficulty: "advanced" }}
+            adminConfig={{
+              max_difficulty: "advanced",
+              max_questions: toolInfo?.total_for_tool ?? 10,
+            }}
             onComplete={() => advance("voice")}
           />
         )}
@@ -168,12 +183,20 @@ export default function AssessmentChatPage() {
           <ChatMcqRunner
             sessionId={sessionId}
             totalQuestions={toolInfo?.total_for_tool ?? 1}
+            timeLimitSeconds={toolInfo?.time_limit_seconds ?? undefined}
+            onLoadingChange={setToolLoading}
             onComplete={() => advance("mcq")}
           />
         )}
 
         {currentTool === "diagram" && (
-          <DiagramStub onNext={() => advance("diagram")} />
+          <ChatDiagramRunner
+            sessionId={sessionId}
+            totalQuestions={toolInfo?.total_for_tool ?? 1}
+            timeLimitSeconds={toolInfo?.time_limit_seconds ?? undefined}
+            onLoadingChange={setToolLoading}
+            onComplete={() => advance("diagram")}
+          />
         )}
       </SessionProctoringShell>
     </main>
@@ -186,53 +209,72 @@ interface McqQuestion {
   options: McqOption[];
 }
 
-/**
- * Self-contained MCQ runner: seeds a first question, then loops through the
- * silent /answer endpoint until the tool's question budget is exhausted, then
- * signals the examiner to advance.
- */
 function ChatMcqRunner({
   sessionId,
   totalQuestions,
+  timeLimitSeconds,
+  onLoadingChange,
   onComplete,
 }: {
   sessionId: string;
   totalQuestions: number;
+  timeLimitSeconds?: number;
+  onLoadingChange: (loading: boolean) => void;
   onComplete: () => void;
 }) {
   const [question, setQuestion] = useState<McqQuestion | null>(null);
+  const [budget, setBudget] = useState(totalQuestions);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const seeded = useRef(false);
+
+  const timerPaused = loading || submitting;
+  const { secondsRemaining } = useQuestionTimer(timeLimitSeconds, question?.id ?? questionIndex, {
+    enabled: Boolean(timeLimitSeconds),
+    armed: Boolean(question),
+    paused: timerPaused,
+  });
+
+  useEffect(() => {
+    onLoadingChange(loading || submitting);
+  }, [loading, onLoadingChange, submitting]);
 
   useEffect(() => {
     if (seeded.current) return;
     seeded.current = true;
-    fetch(`${API_BASE}/mcq/questions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question_text:
-          "Before answering an assessment question, what is the best first step?",
-        difficulty: "easy",
-        correct_option: "A",
-        options: [
-          { label: "A", text: "Read carefully and identify the requirement" },
-          { label: "B", text: "Answer quickly without analysis" },
-          { label: "C", text: "Skip it immediately" },
-          { label: "D", text: "Pick the longest option" },
-        ],
-      }),
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error("Failed to load MCQ");
-        setQuestion((await res.json()) as McqQuestion);
-      })
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : "Failed to load MCQ"),
-      );
-  }, []);
+    (async () => {
+      try {
+        const startRes = await fetch(`${API_BASE}/mcq/sessions/${sessionId}/start`, {
+          method: "POST",
+        });
+        if (!startRes.ok) {
+          const body = (await startRes.json().catch(() => ({}))) as { detail?: string };
+          throw new Error(body.detail ?? "Failed to load MCQ");
+        }
+        const startData = (await startRes.json()) as {
+          status: string;
+          total_questions: number;
+          question: McqQuestion | null;
+        };
+        setBudget(startData.total_questions);
+
+        if (startData.status === "ready" && startData.question) {
+          setQuestion(startData.question);
+          return;
+        }
+
+        const pending = await pollMcqPendingQuestion(API_BASE, sessionId);
+        setQuestion(pending.question);
+        setBudget(pending.total_questions);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load MCQ");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [sessionId]);
 
   const handleSubmit = useCallback(
     async (questionId: number, selectedLabel: string) => {
@@ -246,19 +288,30 @@ function ChatMcqRunner({
             question_id: questionId,
             selected_option: selectedLabel,
             question_index: questionIndex,
-            total_questions: totalQuestions,
           }),
         });
-        if (!res.ok) throw new Error("Failed to submit answer");
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { detail?: string };
+          throw new Error(body.detail ?? "Failed to submit answer");
+        }
         const data = (await res.json()) as {
           next_question: McqQuestion | null;
           is_complete: boolean;
+          status?: string;
         };
-        if (
-          data.is_complete ||
-          !data.next_question ||
-          questionIndex + 1 >= totalQuestions
-        ) {
+        if (data.is_complete) {
+          onComplete();
+          return;
+        }
+        if (data.status === "generating" || !data.next_question) {
+          setLoading(true);
+          const pending = await pollMcqPendingQuestion(API_BASE, sessionId);
+          setQuestion(pending.question);
+          setBudget(pending.total_questions);
+          setQuestionIndex((prev) => prev + 1);
+          return;
+        }
+        if (questionIndex + 1 >= budget) {
           onComplete();
           return;
         }
@@ -268,16 +321,32 @@ function ChatMcqRunner({
         setError(err instanceof Error ? err.message : "Submit failed");
       } finally {
         setSubmitting(false);
+        setLoading(false);
       }
     },
-    [sessionId, questionIndex, totalQuestions, onComplete],
+    [sessionId, questionIndex, budget, onComplete],
   );
 
   return (
     <div className="flex flex-col items-center gap-4">
-      <div className="w-full max-w-2xl text-sm text-[#1F2430]/70">
-        Question {questionIndex + 1} of {totalQuestions}
+      <div className="flex w-full max-w-2xl items-center justify-between text-sm text-[#1F2430]/70">
+        <span>
+          Question {question ? questionIndex + 1 : "…"} of {budget}
+        </span>
+        {secondsRemaining != null ? (
+          <span className="font-medium tabular-nums">
+            {formatQuestionTimer(secondsRemaining)}
+          </span>
+        ) : null}
       </div>
+      {(loading || submitting) && !question && (
+        <p className="text-sm text-[#1F2430]/70">Preparing your question…</p>
+      )}
+      {submitting && question && (
+        <p className="text-sm text-[#1F2430]/70">
+          Answer saved — preparing your next question…
+        </p>
+      )}
       {error && (
         <p className="w-full max-w-2xl rounded-lg border border-[#E5484D]/30 bg-[#E5484D]/5 p-3 text-sm text-[#E5484D]">
           {error}
@@ -293,27 +362,118 @@ function ChatMcqRunner({
           isSubmitting={submitting}
         />
       ) : (
-        <p className="text-sm text-[#1F2430]/70">Loading question…</p>
+        !error && (
+          <p className="text-sm text-[#1F2430]/70">Loading question…</p>
+        )
       )}
     </div>
   );
 }
 
-/** Placeholder for the diagram tool (built separately). */
-function DiagramStub({ onNext }: { onNext: () => void }) {
-  return (
-    <div className="mx-auto w-full max-w-2xl rounded-[24px] border border-[#D8DDF0] bg-[#FBFBFD] p-6 text-center">
-      <p className="text-lg font-semibold text-[#1F2430]">Diagram question</p>
-      <p className="mt-2 text-sm text-[#1F2430]/70">
-        The diagram tool is coming soon.
+function ChatDiagramRunner({
+  sessionId,
+  totalQuestions,
+  timeLimitSeconds,
+  onLoadingChange,
+  onComplete,
+}: {
+  sessionId: string;
+  totalQuestions: number;
+  timeLimitSeconds?: number;
+  onLoadingChange: (loading: boolean) => void;
+  onComplete: () => void;
+}) {
+  const [question, setQuestion] = useState<DiagramNextQuestion | null>(null);
+  const [budget, setBudget] = useState(totalQuestions);
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const seeded = useRef(false);
+
+  const { secondsRemaining } = useQuestionTimer(
+    timeLimitSeconds,
+    question?.id ?? questionIndex,
+    {
+      enabled: Boolean(timeLimitSeconds),
+      armed: Boolean(question),
+      paused: loading || busy,
+    },
+  );
+
+  useEffect(() => {
+    onLoadingChange(loading || busy);
+  }, [busy, loading, onLoadingChange]);
+
+  useEffect(() => {
+    if (seeded.current) return;
+    seeded.current = true;
+    (async () => {
+      try {
+        const startRes = await fetch(`${API_BASE}/diagram/sessions/${sessionId}/start`, {
+          method: "POST",
+        });
+        if (!startRes.ok) {
+          const body = (await startRes.json().catch(() => ({}))) as { detail?: string };
+          throw new Error(body.detail ?? "Failed to load diagram question");
+        }
+        const startData = (await startRes.json()) as {
+          status: string;
+          total_questions: number;
+          question: DiagramNextQuestion | null;
+        };
+        setBudget(startData.total_questions);
+        if (startData.status === "ready" && startData.question) {
+          setQuestion(startData.question);
+          return;
+        }
+        const pending = await pollDiagramPendingQuestion(API_BASE, sessionId);
+        setQuestion(pending.question);
+        setBudget(pending.total_questions);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load diagram");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [sessionId]);
+
+  if (error) {
+    return (
+      <p className="mx-auto w-full max-w-2xl rounded-lg border border-[#E5484D]/30 bg-[#E5484D]/5 p-3 text-sm text-[#E5484D]">
+        {error}
       </p>
-      <button
-        type="button"
-        onClick={onNext}
-        className="mt-5 rounded-lg bg-[#004EFF] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#3374FF]"
-      >
-        Next
-      </button>
+    );
+  }
+
+  if (!question) {
+    return (
+      <p className="text-center text-sm text-[#1F2430]/70">Preparing your diagram…</p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-3">
+      {secondsRemaining != null ? (
+        <div className="w-full max-w-2xl text-right text-sm font-medium tabular-nums text-[#1F2430]/70">
+          {formatQuestionTimer(secondsRemaining)}
+        </div>
+      ) : null}
+      <DiagramTool
+        key={question.id}
+        questionId={question.id}
+        svgContent={question.svg_content}
+        prompt={question.prompt}
+        questionIndex={questionIndex}
+        totalQuestions={budget}
+        sessionId={sessionId}
+        onBusyChange={setBusy}
+        onComplete={onComplete}
+        onNext={(nextQuestion) => {
+          setQuestion(nextQuestion);
+          setQuestionIndex((prev) => prev + 1);
+        }}
+      />
     </div>
   );
 }
