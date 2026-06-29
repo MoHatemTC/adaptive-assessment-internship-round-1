@@ -33,6 +33,7 @@ from app.features.mcq.models import (
     SkillDimension,
 )
 from app.features.mcq.service import normalize_option_id
+from app.shared.grading_persist import persist_grade_result, rubric_from_objective_score
 
 logger = get_logger(__name__)
 
@@ -57,6 +58,8 @@ async def evaluate_mcq_answer(
     question_index: int,
     mcq_response_id: int,
     db: AsyncSession,
+    *,
+    skip_memory: bool = False,
 ) -> dict[str, Any]:
     """Grade one MCQ answer silently and extract a memory card.
 
@@ -145,6 +148,18 @@ async def evaluate_mcq_answer(
     # 7. Persist the silent grade — what ``_fetch_mcq_answers`` reads.
     mcq_response.score = score
     mcq_response.grading_feedback = grading_feedback
+    await persist_grade_result(
+        db,
+        session_id=session_id,
+        tool_type="mcq",
+        tool_session_id=mcq_response_id,
+        question_index=question_index,
+        rubric_scores=rubric_from_objective_score(
+            score=score,
+            dimension=dimension_value,
+            feedback=grading_feedback,
+        ),
+    )
     await db.commit()
 
     logger.info(
@@ -155,8 +170,46 @@ async def evaluate_mcq_answer(
         dimension=dimension_value,
     )
 
-    # 8. Extract a memory card (never surfaced to the learner). The memory agent
-    #    manages its own database sessions internally.
+    if skip_memory:
+        return {"memory_card": None, "memory_summary": ""}
+
+    # Reuse the response/question/options already loaded above — no re-query.
+    return await _run_mcq_memory_agent(
+        session_id=session_id,
+        question_index=question_index,
+        mcq_response=mcq_response,
+        question=question,
+        options=options,
+        db=db,
+    )
+
+
+async def _run_mcq_memory_agent(
+    *,
+    session_id: str,
+    question_index: int,
+    mcq_response: MCQResponse,
+    question: MCQQuestion,
+    options: list[MCQOption],
+    db: AsyncSession,
+) -> dict[str, Any]:
+    """Run the memory agent from already-loaded MCQ objects (no DB round-trips)."""
+    normalized_selected = normalize_option_id(mcq_response.selected_option)
+    selected_option = next(
+        (o for o in options if normalize_option_id(o.label) == normalized_selected),
+        None,
+    )
+    learner_response_text = (
+        selected_option.text if selected_option else mcq_response.selected_option
+    )
+    passed = (mcq_response.score or 0.0) >= 0.5
+    dimension = question.dimension or _DEFAULT_DIMENSION
+    dimension_value = dimension.value
+    rubric_scores = {
+        "accuracy": mcq_response.score or 0.0,
+        "dimension": dimension_value,
+        "is_correct": passed,
+    }
     difficulty_for_memory = DIFFICULTY_MAP.get(
         question.difficulty or "medium", "beginner"
     )
@@ -175,3 +228,39 @@ async def evaluate_mcq_answer(
         "memory_card": memory_card,
         "memory_summary": memory_summary,
     }
+
+
+async def extract_mcq_memory_for_response(
+    session_id: str,
+    question_index: int,
+    mcq_response_id: int,
+    db: AsyncSession,
+) -> dict[str, Any]:
+    """Run the memory agent for an already-graded MCQ response (standalone load)."""
+    response_result = await db.exec(
+        select(MCQResponse).where(MCQResponse.id == mcq_response_id)
+    )
+    mcq_response = response_result.first()
+    if mcq_response is None:
+        raise ValueError(f"MCQResponse not found: {mcq_response_id}")
+
+    question_result = await db.exec(
+        select(MCQQuestion).where(MCQQuestion.id == mcq_response.question_id)
+    )
+    question = question_result.first()
+    if question is None:
+        raise ValueError(f"MCQQuestion not found: {mcq_response.question_id}")
+
+    options_result = await db.exec(
+        select(MCQOption).where(MCQOption.question_id == question.id)
+    )
+    options = options_result.all()
+
+    return await _run_mcq_memory_agent(
+        session_id=session_id,
+        question_index=question_index,
+        mcq_response=mcq_response,
+        question=question,
+        options=list(options),
+        db=db,
+    )
