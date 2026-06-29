@@ -486,18 +486,7 @@ def test_answer_endpoint_response_never_contains_score():
     )
     gen_mock = AsyncMock(return_value=next_question)
 
-    # The /answer endpoint now enforces proctoring readiness and loads blueprint
-    # context; both are exercised elsewhere. Here we isolate response shape.
-    enforce_mock = AsyncMock(return_value=None)
-    blueprint_ctx_mock = AsyncMock(return_value=(MagicMock(), {}, 5, {}))
-
     with (
-        patch("app.features.mcq.background_pipeline.async_pipeline_enabled", lambda: False),
-        patch(
-            "app.proctoring.enforcement.ensure_tool_session_allowed",
-            new=enforce_mock,
-        ),
-        patch("app.features.mcq.api.mcq_blueprint_context", new=blueprint_ctx_mock),
         patch("app.features.mcq.api.run_mcq_loop", new=loop_mock),
         patch("app.features.mcq.api.generate_and_store_next_mcq", new=gen_mock),
         TestClient(app) as client,
