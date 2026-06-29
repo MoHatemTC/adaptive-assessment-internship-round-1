@@ -60,6 +60,7 @@ class Settings(BaseSettings):
         LANGFUSE_SECRET_KEY: Langfuse secret key for observability tracing.
         LANGFUSE_HOST: Base URL of the Langfuse server.
         SECRET_KEY: Symmetric key used to sign and verify admin JWT tokens.
+        ACCESS_TOKEN_EXPIRE_MINUTES: Admin JWT lifetime in minutes.
         ENVIRONMENT: Deployment environment; one of ``development``,
             ``staging``, or ``production``.
     """
@@ -97,6 +98,7 @@ class Settings(BaseSettings):
 
     # ── Security / runtime ────────────────────────────────────────────────────
     SECRET_KEY: SecretStr
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: SecretStr = SecretStr("admin")
     ENVIRONMENT: str = "development"
