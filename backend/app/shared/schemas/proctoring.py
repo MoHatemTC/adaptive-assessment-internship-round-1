@@ -159,6 +159,8 @@ class CameraAnalyzeResponse(BaseModel):
 
     compliant: bool
     face_visible: bool
+    looking_at_screen: bool = True
+    person_count: int = Field(ge=0)
     face_count: int = Field(ge=0)
     identity_match_score: Optional[float] = Field(None, ge=0.0, le=1.0)
     violations: list[CameraViolationRead]
