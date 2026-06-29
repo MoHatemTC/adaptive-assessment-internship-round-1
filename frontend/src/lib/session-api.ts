@@ -100,6 +100,10 @@ export function startSession(
   );
 }
 
+export function getMySession(accessToken: string): Promise<SessionRead> {
+  return request<SessionRead>("/api/v1/sessions/me", { method: "GET" }, accessToken);
+}
+
 export function completeSession(
   sessionId: string,
   accessToken: string,
@@ -129,6 +133,7 @@ export interface NextToolInfo {
   difficulty: string;
   question_number: number;
   total_for_tool: number;
+  time_limit_seconds?: number | null;
 }
 
 export interface ExaminerRespondResponse {

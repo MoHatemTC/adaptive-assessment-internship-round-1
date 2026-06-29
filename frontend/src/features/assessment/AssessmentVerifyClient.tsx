@@ -96,11 +96,20 @@ export function AssessmentVerifyClient({
         cvFile,
       );
 
-      const verification = await verifySessionIdentity({
-        session_id: signIn.session_id,
-        reference_image_b64: frame,
-        live_capture_b64: frame,
-      });
+      let verification;
+      try {
+        verification = await verifySessionIdentity({
+          session_id: signIn.session_id,
+          reference_image_b64: frame,
+          live_capture_b64: frame,
+        });
+      } catch (verifyErr) {
+        throw new Error(
+          verifyErr instanceof Error
+            ? verifyErr.message
+            : "Identity verification request failed",
+        );
+      }
 
       if (!verification.verified) {
         throw new Error(
