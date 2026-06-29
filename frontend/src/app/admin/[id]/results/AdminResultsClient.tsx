@@ -5,6 +5,10 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { SessionRadarReportView } from "@/features/report/SessionRadarReportView";
+import {
+  getSessionIntegritySummary,
+  type SessionIntegritySnapshot,
+} from "@/lib/admin-api";
 import { listAssessmentSessions } from "@/lib/session-api";
 
 interface SessionListItem {
@@ -12,6 +16,30 @@ interface SessionListItem {
   status: string;
   created_at: string;
   learner_name: string;
+}
+
+function IntegrityPanel({ snapshot }: { snapshot: SessionIntegritySnapshot }) {
+  return (
+    <section className="rounded-xl border border-border bg-white p-4">
+      <h2 className="text-sm font-semibold text-neutral">Integrity summary</h2>
+      <dl className="mt-3 grid gap-2 text-sm text-neutral/80 sm:grid-cols-2">
+        <div>
+          <dt className="text-neutral/60">Verification</dt>
+          <dd className="capitalize">{snapshot.verification_status.replace(/_/g, " ")}</dd>
+        </div>
+        <div>
+          <dt className="text-neutral/60">Identity verified</dt>
+          <dd>{snapshot.identity_verified ? "Yes" : "No"}</dd>
+        </div>
+        <div>
+          <dt className="text-neutral/60">High-severity events</dt>
+          <dd>
+            {snapshot.high_severity_count} / {snapshot.threshold}
+          </dd>
+        </div>
+      </dl>
+    </section>
+  );
 }
 
 export function AdminResultsClient() {
@@ -22,6 +50,7 @@ export function AdminResultsClient() {
     typeof window !== "undefined" ? localStorage.getItem("masaar_admin_token") : null;
 
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
+  const [integrity, setIntegrity] = useState<SessionIntegritySnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,6 +76,21 @@ export function AdminResultsClient() {
     };
   }, [sessionId, adminToken, params.id]);
 
+  useEffect(() => {
+    if (!sessionId || !adminToken) return;
+    let cancelled = false;
+    getSessionIntegritySummary(sessionId)
+      .then((snapshot) => {
+        if (!cancelled) setIntegrity(snapshot);
+      })
+      .catch(() => {
+        if (!cancelled) setIntegrity(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, adminToken]);
+
   return (
     <main className="mx-auto min-h-screen max-w-4xl space-y-6 px-4 py-8">
       <header>
@@ -58,11 +102,14 @@ export function AdminResultsClient() {
       </header>
 
       {sessionId ? (
-        <SessionRadarReportView
-          sessionId={sessionId}
-          title="Candidate skill profile"
-          accessToken={adminToken ?? undefined}
-        />
+        <div className="space-y-6">
+          {integrity ? <IntegrityPanel snapshot={integrity} /> : null}
+          <SessionRadarReportView
+            sessionId={sessionId}
+            title="Candidate skill profile"
+            accessToken={adminToken ?? undefined}
+          />
+        </div>
       ) : loading ? (
         <p className="text-sm text-neutral/70">Loading sessions…</p>
       ) : error ? (

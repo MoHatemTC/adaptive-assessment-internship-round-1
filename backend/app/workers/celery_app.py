@@ -22,6 +22,10 @@ celery_app.conf.update(
     task_default_queue="default",
     task_track_started=True,
     worker_prefetch_multiplier=1,
+    include=[
+        "app.workers.report_tasks",
+        "app.workers.email_tasks",
+    ],
 )
 
 __all__ = ["celery_app"]
