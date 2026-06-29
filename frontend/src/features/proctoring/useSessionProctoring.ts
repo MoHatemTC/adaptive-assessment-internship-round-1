@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
-import { completeSession, startSession } from "@/lib/session-api";
+import { startSession } from "@/lib/session-api";
 import {
   readSessionAccessToken,
   readSessionId,
@@ -47,13 +47,7 @@ export function useSessionProctoring({
     });
 
     return () => {
-      if (!lifecycleStartedRef.current) {
-        return;
-      }
       lifecycleStartedRef.current = false;
-      void completeSession(sessionId, accessToken).catch(() => {
-        // best-effort teardown
-      });
     };
   }, [accessToken, enabled, manageLifecycle, sessionId]);
 

@@ -19,6 +19,11 @@ const IDLE_MS = 120_000;
 const AUDIO_POLL_MS = 5_000;
 const INTEGRITY_POLL_MS = 30_000;
 const DEVTOOLS_THRESHOLD = 160;
+/** Camera VLM cadence ceiling (WP-4): default 1.5s, max 2s. */
+const CAMERA_POLL_MS = Math.min(
+  2000,
+  Number(process.env.NEXT_PUBLIC_PROCTORING_CAMERA_INTERVAL_MS ?? 1500),
+);
 
 export interface UseProctoringOptions {
   sessionId: string;
@@ -64,6 +69,8 @@ export function useProctoring({
     highSeverityCount: 0,
     verificationStatus: null,
     lastViolation: null,
+    lookingAway: false,
+    cameraAlert: null,
     cameraReady: false,
     microphoneReady: false,
     error: null,
@@ -77,6 +84,7 @@ export function useProctoring({
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const lastActivityRef = useRef(Date.now());
   const flaggedRef = useRef(false);
+  const isAnalyzingCameraRef = useRef(false);
 
   policyRef.current = policy;
 
@@ -179,6 +187,16 @@ export function useProctoring({
       void reportEvent("paste", { source: "clipboard" });
     };
 
+    const onPasteCapture = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (text.length > 200) {
+        void reportEvent("ai_usage", {
+          source: "large_paste",
+          length: text.length,
+        });
+      }
+    };
+
     const onContextMenu = (event: MouseEvent) => {
       void reportEvent("context_menu", { x: event.clientX, y: event.clientY });
     };
@@ -204,6 +222,7 @@ export function useProctoring({
     window.addEventListener("blur", onBlur);
     document.addEventListener("copy", onCopy);
     document.addEventListener("paste", onPaste);
+    document.addEventListener("paste", onPasteCapture, true);
     document.addEventListener("contextmenu", onContextMenu);
     window.addEventListener("beforeprint", onPrint);
     document.addEventListener("fullscreenchange", onFullscreen);
@@ -229,11 +248,24 @@ export function useProctoring({
       void refreshIntegrity();
     }, INTEGRITY_POLL_MS);
 
+    const extensionTimer = window.setInterval(() => {
+      const suspicious = [
+        "__grammarly",
+        "__grammarlyExtension",
+        "chatgpt",
+        "monica",
+      ].some((key) => key in window);
+      if (suspicious) {
+        void reportEvent("extension_detected", { source: "window_global_probe" });
+      }
+    }, 10_000);
+
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("blur", onBlur);
       document.removeEventListener("copy", onCopy);
       document.removeEventListener("paste", onPaste);
+      document.removeEventListener("paste", onPasteCapture, true);
       document.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("beforeprint", onPrint);
       document.removeEventListener("fullscreenchange", onFullscreen);
@@ -243,6 +275,7 @@ export function useProctoring({
       window.clearInterval(devtoolsTimer);
       window.clearInterval(idleTimer);
       window.clearInterval(integrityTimer);
+      window.clearInterval(extensionTimer);
     };
   }, [enabled, policy, refreshIntegrity, reportEvent]);
 
@@ -264,6 +297,12 @@ export function useProctoring({
         }
 
         cameraStreamRef.current = stream;
+        stream.getVideoTracks().forEach((track) => {
+          track.onended = () => {
+            void reportEvent("camera_disabled", { source: "track.ended" });
+            setState((prev) => ({ ...prev, cameraReady: false }));
+          };
+        });
         const video = document.createElement("video");
         video.srcObject = stream;
         video.muted = true;
@@ -272,13 +311,17 @@ export function useProctoring({
         videoRef.current = video;
         setState((prev) => ({ ...prev, cameraReady: true }));
 
-        const pollMs = policy.camera_poll_interval_seconds * 1000;
+        const policyPollMs = policy.camera_poll_interval_seconds * 1000;
+        const pollMs = Math.min(CAMERA_POLL_MS, policyPollMs);
         cameraTimer = window.setInterval(() => {
+          if (isAnalyzingCameraRef.current) return;
+
           const frame = videoRef.current
             ? captureVideoFrame(videoRef.current)
             : null;
           if (!frame) return;
 
+          isAnalyzingCameraRef.current = true;
           void analyzeCameraFrame({
             session_id: sessionId,
             frame_b64: frame,
@@ -286,6 +329,13 @@ export function useProctoring({
             client_timestamp: new Date().toISOString(),
           })
             .then((result) => {
+              const lookAwayViolation = result.violations.find(
+                (violation) => violation.event_type === "looking_away",
+              );
+              const isLookingAway =
+                Boolean(lookAwayViolation) ||
+                (result.face_visible && !result.looking_at_screen);
+
               if (!result.compliant) {
                 setState((prev) => ({
                   ...prev,
@@ -293,15 +343,29 @@ export function useProctoring({
                     prev.violationCount + result.events_recorded.length,
                   lastViolation:
                     result.violations[0]?.event_type ?? prev.lastViolation,
+                  lookingAway: isLookingAway,
+                  cameraAlert: isLookingAway
+                    ? (lookAwayViolation?.description ??
+                      "Please face the screen")
+                    : null,
                 }));
                 for (const violation of result.violations) {
                   onViolation?.(violation.event_type);
                 }
+              } else {
+                setState((prev) => ({
+                  ...prev,
+                  lookingAway: false,
+                  cameraAlert: null,
+                }));
               }
               void refreshIntegrity();
             })
             .catch(() => {
-              void reportEvent("camera_disabled", { source: "analyze-camera" });
+              // Transient analyze-camera failures (network/VLM) are not camera loss.
+            })
+            .finally(() => {
+              isAnalyzingCameraRef.current = false;
             });
         }, pollMs);
       } catch {
@@ -343,6 +407,12 @@ export function useProctoring({
         }
 
         micStreamRef.current = stream;
+        stream.getAudioTracks().forEach((track) => {
+          track.onended = () => {
+            void reportEvent("microphone_disabled", { source: "track.ended" });
+            setState((prev) => ({ ...prev, microphoneReady: false }));
+          };
+        });
         const audioContext = new AudioContext();
         const source = audioContext.createMediaStreamSource(stream);
         const analyser = audioContext.createAnalyser();
@@ -385,9 +455,7 @@ export function useProctoring({
               }
             })
             .catch(() => {
-              void reportEvent("microphone_disabled", {
-                source: "analyze-audio",
-              });
+              // Transient analyze-audio failures are not microphone loss.
             });
         }, AUDIO_POLL_MS);
       } catch {

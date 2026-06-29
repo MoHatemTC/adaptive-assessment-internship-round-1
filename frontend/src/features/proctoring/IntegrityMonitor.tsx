@@ -21,6 +21,15 @@ export function IntegrityMonitor({
 
   return (
     <>
+      {state.lookingAway && state.cameraAlert && (
+        <div
+          className="fixed left-1/2 top-4 z-[60] w-[min(92vw,28rem)] -translate-x-1/2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-center text-sm font-medium text-amber-950 shadow-lg"
+          role="alert"
+          aria-live="assertive"
+        >
+          {state.cameraAlert}
+        </div>
+      )}
       {children}
       {showBadge && options.enabled !== false && state.active && (
         <div
@@ -38,7 +47,10 @@ export function IntegrityMonitor({
               Status: {state.verificationStatus.replace("_", " ")}
             </span>
           )}
-          {state.lastViolation && (
+          {state.lookingAway && (
+            <span className="font-medium text-amber-700">Looking away</span>
+          )}
+          {state.lastViolation && !state.lookingAway && (
             <span className="text-error">
               Last: {state.lastViolation.replace(/_/g, " ")}
             </span>

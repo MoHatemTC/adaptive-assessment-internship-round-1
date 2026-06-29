@@ -19,6 +19,7 @@ _BROWSER_EVENTS: dict[ProctoringEventType, ProctoringSeverity] = {
     "copy_paste": "high",
     "screenshot": "high",
     "ai_usage": "high",
+    "extension_detected": "high",
     "idle_timeout": "low",
 }
 
@@ -74,6 +75,7 @@ CLIENT_MONITOR_CHECKS: Final[frozenset[ProctoringEventType]] = frozenset(
         "copy_paste",
         "screenshot",
         "ai_usage",
+        "extension_detected",
         "idle_timeout",
         "microphone_muted",
         "microphone_disabled",
