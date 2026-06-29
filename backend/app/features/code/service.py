@@ -192,6 +192,9 @@ async def generate_challenge(
     payload: GenerateChallengeRequest,
 ) -> GenerateChallengeResponse:
     """Author and persist the next challenge from an adaptive contract."""
+    from app.proctoring.enforcement import ensure_tool_session_allowed
+
+    await ensure_tool_session_allowed(db, payload.session_id)
     if payload.contract is None:
         contract = await adaptation.compute_adaptive_contract(
             db,
@@ -413,11 +416,10 @@ async def _find_idempotent_adaptive_submission(
 async def adaptive_submit(
     db: AsyncSession, payload: AdaptiveSubmitRequest
 ) -> AdaptiveSubmitResponse:
-    """Accept a submission, run the adaptive loop, and return the contract.
+    """Accept a submission, run the adaptive loop, and return the contract."""
+    from app.proctoring.enforcement import ensure_tool_session_allowed
 
-    Challenge generation is a separate ``POST /generate-challenge`` call so the
-    submit request stays within frontend proxy timeouts.
-    """
+    await ensure_tool_session_allowed(db, payload.session_id)
     existing_submission = await _find_idempotent_adaptive_submission(db, payload)
     if existing_submission is not None:
         contract = await adaptation.compute_adaptive_contract(

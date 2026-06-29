@@ -129,7 +129,7 @@ async def resolve_policy(db: AsyncSession, session: AssessmentSession) -> Procto
     assessment = await db.get(Assessment, session.assessment_id)
     threshold: int | None = None
     enabled_checks: list[str] | None = None
-    camera_poll_interval_seconds = 20
+    camera_poll_interval_seconds = 1.5
     event_cooldown_seconds = 30
     require_camera = True
     require_microphone = False
@@ -147,8 +147,8 @@ async def resolve_policy(db: AsyncSession, session: AssessmentSession) -> Procto
             enabled_checks = [str(item) for item in raw_checks]
 
         raw_poll = cfg.get("camera_poll_interval_seconds")
-        if isinstance(raw_poll, int) and 5 <= raw_poll <= 120:
-            camera_poll_interval_seconds = raw_poll
+        if isinstance(raw_poll, (int, float)) and 1.0 <= float(raw_poll) <= 2.0:
+            camera_poll_interval_seconds = float(raw_poll)
 
         raw_cooldown = cfg.get("event_cooldown_seconds")
         if isinstance(raw_cooldown, int) and 0 <= raw_cooldown <= 300:

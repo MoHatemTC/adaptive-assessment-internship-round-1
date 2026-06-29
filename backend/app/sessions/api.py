@@ -31,6 +31,7 @@ from app.core.deps import (
 from app.core.logging import get_logger
 from app.core.security import generate_session_token, hash_token
 from app.proctoring import service as proctoring_service
+from app.proctoring.deps import require_active_proctored_session
 from app.sessions.models import AssessmentSession
 from app.sessions.schemas import (
     ExaminerRespondRequest,
@@ -277,7 +278,7 @@ async def respond(
     session_id: str,
     payload: ExaminerRespondRequest,
     db: AsyncSession = Depends(get_db),
-    session: AssessmentSession = Depends(get_session_by_token),
+    session: AssessmentSession = Depends(require_active_proctored_session),
 ) -> ExaminerRespondResponse:
     """Advance the examiner and report which tool the learner should use next.
 

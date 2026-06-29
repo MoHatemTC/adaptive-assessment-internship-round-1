@@ -261,6 +261,9 @@ async def start_adaptive_voice_session(
     Returns:
         The new session's id, question, time limit, and initial status.
     """
+    from app.proctoring.enforcement import ensure_tool_session_allowed
+
+    await ensure_tool_session_allowed(db, payload.session_id)
     from app.features.voice.models import VoiceSession
 
     new_session = VoiceSession(

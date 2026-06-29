@@ -28,6 +28,10 @@ from app.admin.models import Assessment
 from app.agent.state import ExaminerState
 from app.core.logging import get_logger
 from app.sessions.models import AssessmentSession
+from app.shared.blueprint_utils import (
+    DEFAULT_CODE_QUESTION_TIME_SECONDS,
+    tool_time_limit_seconds,
+)
 from app.shared.schemas.blueprint import Blueprint
 
 logger = get_logger(__name__)
@@ -148,12 +152,21 @@ def route_question(state: ExaminerState) -> dict[str, Any]:
         return {"current_tool": "", "next_question": None, "is_complete": True}
 
     difficulty = state["current_difficulty"].get(current, "beginner")
+    time_default = (
+        DEFAULT_CODE_QUESTION_TIME_SECONDS if current == "code" else None
+    )
+    time_limit = tool_time_limit_seconds(
+        state["blueprint"],
+        current,
+        default=time_default,
+    )
     next_question = {
         "tool": current,
         "difficulty": difficulty,
         "question_number": questions_done.get(current, 0) + 1,
         "total_for_tool": _tool_count(state["blueprint"], current),
         "max_questions": _tool_count(state["blueprint"], current),
+        "time_limit_seconds": time_limit,
     }
     logger.info(
         "examiner_routed",

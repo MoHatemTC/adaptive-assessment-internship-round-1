@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.features.code import llm_generation, service
+
+# Proctoring readiness is covered by the enforcement test suite; these tests
+# isolate challenge generation, so the gate is stubbed out.
+_BYPASS_ENFORCEMENT = patch(
+    "app.proctoring.enforcement.ensure_tool_session_allowed",
+    new=AsyncMock(return_value=None),
+)
 from app.features.code.llm_generation import GeneratedChallengeSpec, GeneratedTestCase
 from app.features.code.schemas import GenerateChallengeRequest
 from app.shared.schemas.memory import AdaptiveContract, DimensionScore
@@ -71,14 +79,15 @@ async def test_generate_challenge_persists_javascript_spec(monkeypatch):
 
     try:
         async with async_session() as db:
-            result = await service.generate_challenge(
-                db,
-                GenerateChallengeRequest(
-                    session_id=session_id,
-                    assessment_id="assess-gen",
-                    language="javascript",
-                ),
-            )
+            with _BYPASS_ENFORCEMENT:
+                result = await service.generate_challenge(
+                    db,
+                    GenerateChallengeRequest(
+                        session_id=session_id,
+                        assessment_id="assess-gen",
+                        language="javascript",
+                    ),
+                )
             assert result.challenge.language == "javascript"
             assert "module.exports" in result.challenge.starter_code
             await db.rollback()
@@ -98,13 +107,14 @@ async def test_generate_challenge_persists_llm_spec(monkeypatch):
 
     try:
         async with async_session() as db:
-            result = await service.generate_challenge(
-                db,
-                GenerateChallengeRequest(
-                    session_id=session_id,
-                    assessment_id="assess-gen",
-                ),
-            )
+            with _BYPASS_ENFORCEMENT:
+                result = await service.generate_challenge(
+                    db,
+                    GenerateChallengeRequest(
+                        session_id=session_id,
+                        assessment_id="assess-gen",
+                    ),
+                )
             assert result.challenge.title == "Count Vowels"
             assert result.challenge.starter_code.startswith("def solution")
             assert len(result.challenge.test_cases) == 3
@@ -131,7 +141,7 @@ async def test_generate_challenge_rejects_stop_contract():
     )
     try:
         async with async_session() as db:
-            with pytest.raises(Exception) as exc:
+            with _BYPASS_ENFORCEMENT, pytest.raises(Exception) as exc:
                 await service.generate_challenge(
                     db,
                     GenerateChallengeRequest(
