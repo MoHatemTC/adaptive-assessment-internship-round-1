@@ -145,6 +145,28 @@ async def get_correct_label(db: AsyncSession, question_id: int) -> str:
     return question.correct_label
 
 
+async def submit_response_record(
+    db: AsyncSession,
+    question_id: int,
+    session_id: str,
+    answer_text: str,
+    learner_id: Optional[str] = None,
+) -> dict:
+    """Persist a learner answer without blocking on LLM grading."""
+    await _get_question_or_404(db, question_id)
+    response = DiagramResponse(
+        question_id=question_id,
+        session_id=session_id,
+        answer_text=answer_text,
+        learner_id=learner_id,
+        score=None,
+        grading_feedback=None,
+    )
+    db.add(response)
+    await db.flush()
+    return {"question_id": question_id, "response_id": response.id}
+
+
 async def submit_response(
     db: AsyncSession,
     question_id: int,
