@@ -477,6 +477,3 @@ async def test_adaptation_uses_admin_thresholds_and_max_questions():
             await db.rollback()
     finally:
         await engine.dispose()
-
-
-@pytest.mark.asyncio
