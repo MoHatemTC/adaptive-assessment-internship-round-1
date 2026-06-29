@@ -115,11 +115,16 @@ async def build_session_radar_report(
     question_keys = {(row.tool_type, row.question_index) for row in score_rows}
     questions_answered = len(question_keys) if question_keys else len(memory_rows)
 
-    highlights = [
-        row.evidence_summary.strip()
-        for row in reversed(list(memory_rows))
-        if row.evidence_summary and row.evidence_summary.strip()
-    ][:5]
+    highlights: list[str] = []
+    seen: set[str] = set()
+    for row in reversed(list(memory_rows)):
+        text = (row.evidence_summary or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        highlights.append(text)
+        if len(highlights) >= 5:
+            break
 
     dimensions = [
         DimensionRadarPoint(
