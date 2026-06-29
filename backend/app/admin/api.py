@@ -24,6 +24,7 @@ from app.agent.nodes.blueprint import run_planner
 from app.config import get_settings
 from app.core.deps import RateLimitedRoute, get_current_admin, get_db
 from app.core.security import create_access_token, credentials_exception
+from app.shared.schemas.proctoring import SessionIntegritySnapshot
 
 router = APIRouter(tags=["admin"], route_class=RateLimitedRoute)
 
@@ -265,3 +266,19 @@ async def get_assessment_link(
         title=row.title,
         status=row.status,
     )
+
+
+@router.get(
+    "/api/v1/admin/sessions/{session_id}/integrity-summary",
+    response_model=SessionIntegritySnapshot,
+)
+async def get_session_integrity_summary(
+    request: Request,
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin: dict[str, Any] = Depends(get_current_admin),
+) -> SessionIntegritySnapshot:
+    """Integrity snapshot for Abutaleb's admin results panel (radar + integrity)."""
+    from app.proctoring.enforcement import get_integrity_snapshot_for_admin
+
+    return await get_integrity_snapshot_for_admin(db, session_id)
