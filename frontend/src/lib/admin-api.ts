@@ -1,3 +1,9 @@
+import {
+  clearAdminToken,
+  isAdminTokenValid,
+  SessionExpiredError,
+} from "@/lib/admin-auth";
+
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
 /** localStorage key for the admin JWT. Shared with the results page. */
@@ -35,6 +41,37 @@ async function readError(response: Response): Promise<string> {
     // keep default
   }
   return detail;
+}
+
+/** Authenticated admin fetch — clears stale JWT and throws on 401. */
+async function adminFetch(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  if (!isAdminTokenValid()) {
+    clearAdminToken();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("admin-session-expired"));
+    }
+    throw new SessionExpiredError();
+  }
+
+  const headers = {
+    ...authHeaders(),
+    ...(init.headers as Record<string, string> | undefined),
+  };
+
+  const response = await fetch(apiUrl(path), { ...init, headers });
+
+  if (response.status === 401) {
+    clearAdminToken();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("admin-session-expired"));
+    }
+    throw new SessionExpiredError();
+  }
+
+  return response;
 }
 
 export type AssessmentStatus = "draft" | "active" | "archived";
@@ -99,9 +136,8 @@ export async function createAssessment(data: {
   prompt: string;
   tool_config: Record<string, boolean>;
 }): Promise<AssessmentRead> {
-  const response = await fetch(apiUrl("/api/v1/admin/assessments"), {
+  const response = await adminFetch("/api/v1/admin/assessments", {
     method: "POST",
-    headers: authHeaders(),
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error(await readError(response));
@@ -111,26 +147,22 @@ export async function createAssessment(data: {
 export async function generateBlueprint(
   assessmentId: string,
 ): Promise<BlueprintGenerateResponse> {
-  const response = await fetch(
-    apiUrl(`/api/v1/admin/assessments/${assessmentId}/generate-blueprint`),
-    { method: "POST", headers: authHeaders() },
+  const response = await adminFetch(
+    `/api/v1/admin/assessments/${assessmentId}/generate-blueprint`,
+    { method: "POST" },
   );
   if (!response.ok) throw new Error(await readError(response));
   return (await response.json()) as BlueprintGenerateResponse;
 }
 
 export async function listAssessments(): Promise<AssessmentRead[]> {
-  const response = await fetch(apiUrl("/api/v1/admin/assessments"), {
-    headers: authHeaders(),
-  });
+  const response = await adminFetch("/api/v1/admin/assessments");
   if (!response.ok) throw new Error(await readError(response));
   return (await response.json()) as AssessmentRead[];
 }
 
 export async function getAssessment(id: string): Promise<AssessmentRead> {
-  const response = await fetch(apiUrl(`/api/v1/admin/assessments/${id}`), {
-    headers: authHeaders(),
-  });
+  const response = await adminFetch(`/api/v1/admin/assessments/${id}`);
   if (!response.ok) throw new Error(await readError(response));
   return (await response.json()) as AssessmentRead;
 }
@@ -138,10 +170,29 @@ export async function getAssessment(id: string): Promise<AssessmentRead> {
 export async function getShareableLink(
   assessmentId: string,
 ): Promise<AssessmentLinkResponse> {
-  const response = await fetch(
-    apiUrl(`/api/v1/admin/assessments/${assessmentId}/link`),
-    { headers: authHeaders() },
+  const response = await adminFetch(
+    `/api/v1/admin/assessments/${assessmentId}/link`,
   );
   if (!response.ok) throw new Error(await readError(response));
   return (await response.json()) as AssessmentLinkResponse;
 }
+
+/** Integrity snapshot for admin results panel (Abutaleb). */
+export interface SessionIntegritySnapshot {
+  verification_status: string;
+  high_severity_count: number;
+  threshold: number;
+  identity_verified: boolean;
+}
+
+export async function getSessionIntegritySummary(
+  sessionId: string,
+): Promise<SessionIntegritySnapshot> {
+  const response = await adminFetch(
+    `/api/v1/admin/sessions/${sessionId}/integrity-summary`,
+  );
+  if (!response.ok) throw new Error(await readError(response));
+  return (await response.json()) as SessionIntegritySnapshot;
+}
+
+export { SessionExpiredError } from "@/lib/admin-auth";
