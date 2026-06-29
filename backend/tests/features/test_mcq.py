@@ -492,7 +492,7 @@ def test_answer_endpoint_response_never_contains_score():
     blueprint_ctx_mock = AsyncMock(return_value=(MagicMock(), {}, 5, {}))
 
     with (
-        patch("app.features.mcq.background_pipeline.async_pipeline_enabled", lambda: False),
+        patch("app.features.mcq.background_pipeline.async_pipeline_enabled", return_value=False),
         patch(
             "app.proctoring.enforcement.ensure_tool_session_allowed",
             new=enforce_mock,
