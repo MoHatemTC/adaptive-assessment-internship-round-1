@@ -21,7 +21,15 @@ from app.sessions.models import AssessmentSession, GradeResult
 
 
 @pytest.mark.asyncio
-async def test_run_session_judge_averages_rubric_overall():
+async def test_run_session_judge_averages_rubric_overall(monkeypatch):
+    def _raise_llm_unavailable(*_args, **_kwargs):
+        raise RuntimeError("llm unavailable in unit test")
+
+    monkeypatch.setattr(
+        "app.agent.nodes.judge.get_llm_with_tracing",
+        _raise_llm_unavailable,
+    )
+
     session_id = str(uuid.uuid4())
     try:
         async with async_session() as db:
