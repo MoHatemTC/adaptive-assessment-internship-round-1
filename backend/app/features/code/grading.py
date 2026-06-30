@@ -423,8 +423,8 @@ async def upgrade_grade_with_llm(db: AsyncSession, grade_id: int) -> GradeResult
         sandbox_score=sandbox_score,
         passed_tests=passed_tests,
         total_tests=total_tests,
-        session_id=session_id,
-        question_index=question_index,
+        session_id=grade.session_id,
+        question_index=grade.question_index,
     )
     rubric = _compose_rubric(sandbox_score, llm_rubric)
     grade.rubric_scores = rubric.model_dump_json()
