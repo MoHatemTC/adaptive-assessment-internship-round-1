@@ -33,10 +33,6 @@ from app.core.security import generate_session_token, hash_token
 from app.proctoring import service as proctoring_service
 from app.proctoring.deps import require_active_proctored_session
 from app.sessions.models import AssessmentSession
-from app.sessions.time_enforcement import (
-    apply_session_deadline,
-    load_blueprint_for_session,
-)
 from app.sessions.schemas import (
     ExaminerRespondRequest,
     ExaminerRespondResponse,
@@ -45,8 +41,13 @@ from app.sessions.schemas import (
     SessionRead,
     SessionSignInResponse,
 )
+from app.sessions.time_enforcement import (
+    apply_session_deadline,
+    load_blueprint_for_session,
+)
 from app.shared.cv_parser import extract_cv_context
 from app.shared.schemas.proctoring import ProctoringPolicyResponse
+from app.workers.email_tasks import schedule_post_completion_pipeline
 
 _logger = get_logger(__name__)
 
@@ -138,9 +139,7 @@ async def sign_in(
     cv_context: dict = {}
     if cv_file is not None:
         filename = (cv_file.filename or "").lower()
-        is_pdf = (
-            cv_file.content_type == "application/pdf" or filename.endswith(".pdf")
-        )
+        is_pdf = cv_file.content_type == "application/pdf" or filename.endswith(".pdf")
         if is_pdf:
             pdf_bytes = await cv_file.read()
             cv_context = await extract_cv_context(pdf_bytes)
@@ -275,6 +274,18 @@ async def complete_session(
     session.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(session)
+
+    # Trigger post-completion pipeline: judge → report → email.
+    try:
+        profile = _parse_profile(session.learner_profile_json)
+        learner_email = profile.get("email") or None
+    except Exception:  # noqa: BLE001
+        learner_email = None
+    schedule_post_completion_pipeline(
+        session_id=session.id,
+        learner_email=learner_email,
+    )
+
     return await _to_session_read(db, session)
 
 
