@@ -9,7 +9,8 @@ from langchain_core.exceptions import OutputParserException
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.logging import get_logger
 from app.features.code.llm_json import (
     extract_json as _extract_json,
@@ -132,7 +133,15 @@ async def _generate_challenge_spec_raw(
         try:
             response = await bound.ainvoke(
                 attempt_messages,
-                config={"callbacks": callbacks},
+                config=llm_invoke_config(
+                    callbacks,
+                    trace=LangfuseTraceContext(
+                        session_id=contract.session_id,
+                        operation="code_generation",
+                        tool="coding",
+                        question_index=contract.question_index,
+                    ),
+                ),
             )
             content = _extract_llm_text(response.content)
             spec = GeneratedChallengeSpec.model_validate_json(_extract_json(content))
@@ -206,7 +215,18 @@ async def generate_challenge_spec(
     last_error: Exception | None = None
     for attempt in range(2):
         try:
-            result = await structured.ainvoke(messages, config={"callbacks": callbacks})
+            result = await structured.ainvoke(
+                messages,
+                config=llm_invoke_config(
+                    callbacks,
+                    trace=LangfuseTraceContext(
+                        session_id=contract.session_id,
+                        operation="code_generation",
+                        tool="coding",
+                        question_index=contract.question_index,
+                    ),
+                ),
+            )
             spec = (
                 result
                 if isinstance(result, GeneratedChallengeSpec)

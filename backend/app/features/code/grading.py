@@ -19,7 +19,8 @@ from pydantic import ValidationError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.logging import get_logger
 from app.features.code.llm_json import (
     extract_json as _extract_json,
@@ -120,6 +121,8 @@ async def _grade_with_llm(
     sandbox_score: float,
     passed_tests: int,
     total_tests: int,
+    session_id: str | None = None,
+    question_index: int | None = None,
 ) -> RubricScores:
     """Run the approach/efficiency rubric through the traced LLM."""
     from app.config import get_settings
@@ -169,7 +172,15 @@ async def _grade_with_llm(
         try:
             result = await structured.ainvoke(
                 messages,
-                config={"callbacks": callbacks},
+                config=llm_invoke_config(
+                    callbacks,
+                    trace=LangfuseTraceContext(
+                        session_id=session_id,
+                        operation="code_grade",
+                        tool="coding",
+                        question_index=question_index,
+                    ),
+                ),
             )
             rubric = result if isinstance(result, RubricScores) else RubricScores.model_validate(result)
             return _normalize_llm_rubric(rubric)
@@ -282,6 +293,8 @@ async def grade_submission(
         sandbox_score=sandbox_score,
         passed_tests=passed_tests,
         total_tests=total_tests,
+        session_id=session_id,
+        question_index=question_index,
     )
     rubric = _compose_rubric(sandbox_score, llm_rubric)
     return await _persist_grade_result(
@@ -410,6 +423,8 @@ async def upgrade_grade_with_llm(db: AsyncSession, grade_id: int) -> GradeResult
         sandbox_score=sandbox_score,
         passed_tests=passed_tests,
         total_tests=total_tests,
+        session_id=session_id,
+        question_index=question_index,
     )
     rubric = _compose_rubric(sandbox_score, llm_rubric)
     grade.rubric_scores = rubric.model_dump_json()

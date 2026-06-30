@@ -16,7 +16,8 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from pypdf import PdfReader
 
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -152,7 +153,10 @@ async def extract_cv_context(pdf_bytes: bytes) -> dict[str, Any]:
             llm.temperature = 0.0
         response = await llm.ainvoke(
             [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=human)],
-            config={"callbacks": callbacks},
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(operation="cv_parse"),
+            ),
         )
         answer = _parse_answer(response.content)
         if not answer:
