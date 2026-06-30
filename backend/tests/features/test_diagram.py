@@ -114,7 +114,10 @@ async def test_submit_response_calls_grade_answer(db_session):
     with patch("app.features.diagram.service.grade_answer", new=mock):
         await submit_response(db_session, created["id"], "session-1", "LB")
     mock.assert_awaited_once_with(
-        correct_label="Load Balancer", rubric="Accept LB.", answer_text="LB"
+        correct_label="Load Balancer",
+        rubric="Accept LB.",
+        answer_text="LB",
+        session_id="session-1",
     )
 
 
