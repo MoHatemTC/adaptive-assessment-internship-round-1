@@ -11,7 +11,7 @@ services:
     command: npm run dev
     environment:
       NEXT_PUBLIC_API_BASE_URL: ""
-      NEXT_PUBLIC_API_URL: ""
+      NEXT_PUBLIC_API_URL: http://localhost:8000
       BACKEND_URL: http://backend:8000
     volumes:
       - ./frontend:/app
