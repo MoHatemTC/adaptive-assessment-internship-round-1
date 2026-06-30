@@ -1,4 +1,4 @@
-"""Migration: assessment invites and identity reference storage.
+"""Migration: assessment invites table.
 
 Revision ID: 0016_assessment_invites
 Revises: 0015_memory_card_foreign_keys
@@ -64,25 +64,10 @@ def upgrade() -> None:
             unique=True,
         )
 
-    session_columns = {
-        col["name"] for col in inspector.get_columns("assessment_sessions")
-    }
-    if "identity_reference_b64" not in session_columns:
-        op.add_column(
-            "assessment_sessions",
-            sa.Column("identity_reference_b64", sa.Text(), nullable=True),
-        )
-
 
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
-
-    session_columns = {
-        col["name"] for col in inspector.get_columns("assessment_sessions")
-    }
-    if "identity_reference_b64" in session_columns:
-        op.drop_column("assessment_sessions", "identity_reference_b64")
 
     tables = set(inspector.get_table_names())
     if "assessment_invites" in tables:
