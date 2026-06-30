@@ -49,6 +49,11 @@ async def require_completed_session_for_radar(
     session: AssessmentSession = Depends(authorize_radar_report_access),
 ) -> AssessmentSession:
     """Block mid-assessment score leakage — reports are post-completion only."""
+    if session.status == "pending_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Report is awaiting admin review before it can be released.",
+        )
     if session.status != "completed":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

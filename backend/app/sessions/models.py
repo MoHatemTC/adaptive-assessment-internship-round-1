@@ -45,7 +45,7 @@ class AssessmentSession(Base):
     learner_profile_json: Mapped[str] = mapped_column(Text, nullable=False)
     # JSON: {name, role, level, target_skills, consent_given}
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
-    # "pending" / "active" / "completed" / "expired" / "flagged"
+    # "pending" / "active" / "completed" / "expired" / "flagged" / "pending_review"
     proctoring_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="not_started"
     )
@@ -61,6 +61,11 @@ class AssessmentSession(Base):
     )
     expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    judge_review_json: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Serialized SessionJudgeResult when admin review is required",
     )
     started_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

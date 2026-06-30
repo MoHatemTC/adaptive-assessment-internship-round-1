@@ -2,13 +2,17 @@
 
 Karim's tool loops write ``grade_results`` rows; this module aggregates them
 into an ``llm_judge_score`` via an LLM call and a narrative for radar/email.
+
+When the judge finds grading inconsistent with the evidence, the session is
+held for admin review before scores are persisted or emailed to the learner.
 """
 
 from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import select
@@ -19,9 +23,11 @@ from app.core.llm import get_llm_with_tracing
 from app.core.llm_json import extract_llm_text, parse_llm_json
 from app.core.logging import get_logger
 from app.core.metrics import record_llm_call
-from app.sessions.models import GradeResult
+from app.sessions.models import AssessmentSession, GradeResult
 
 _logger = get_logger(__name__)
+
+JudgeReviewStatus = Literal["confirmed", "pending_admin_review"]
 
 
 @dataclass(frozen=True)
@@ -32,6 +38,8 @@ class SessionJudgeResult:
     llm_judge_score: float | None
     narrative: str
     grade_result_count: int
+    review_status: JudgeReviewStatus = "confirmed"
+    review_reason: str | None = None
 
 
 _SYSTEM_PROMPT = """You are an expert assessment judge. Evaluate a learner's
@@ -43,15 +51,20 @@ For each question you will receive:
 - The question's rubric dimension and score (0.0–1.0)
 - Any grading feedback
 
+First decide whether the grading-agent scores are consistent with the evidence.
+Flag for admin review when scores look arbitrary, contradict each other across
+similar questions, or are unsupported by the rubric breakdown.
+
 Produce a JSON object with exactly these fields:
 {
+  "grading_consistent": <bool>,
+  "review_reason": "<short reason when grading_consistent is false, else empty string>",
   "overall_score": <float 0.0–1.0>,
   "narrative": "<2–3 sentence summary of the learner's performance>"
 }
 
-The overall_score should reflect the holistic quality of the learner's work, not
-a simple average. Consider consistency, areas of strength, and patterns across
-different question types."""
+When grading_consistent is false, still provide your best overall_score estimate
+but the platform will hold results for admin review before releasing them."""
 
 
 def _overall_from_rubric(raw: str) -> float | None:
@@ -79,12 +92,54 @@ def _build_judge_prompt(rows: list[GradeResult]) -> str:
             if dims
             else f"overall={rubric.get('overall', '?')}"
         )
-        lines.append(f"- Question {row.question_index} ({row.tool_type}): {dim_str}")
+        feedback = rubric.get("feedback") or rubric.get("summary") or ""
+        suffix = f" — feedback: {feedback}" if feedback else ""
+        lines.append(
+            f"- Question {row.question_index} ({row.tool_type}): {dim_str}{suffix}"
+        )
     lines.append(
-        "\nEvaluate the learner's performance holistically and return a JSON "
-        "object with 'overall_score' (0.0–1.0) and 'narrative' (2–3 sentences)."
+        "\nEvaluate grading consistency and holistic performance. Return JSON with "
+        "'grading_consistent', 'review_reason', 'overall_score' (0.0–1.0), and "
+        "'narrative' (2–3 sentences)."
     )
     return "\n".join(lines)
+
+
+def judge_result_to_json(result: SessionJudgeResult) -> str:
+    """Serialize a judge result for ``AssessmentSession.judge_review_json``."""
+    return json.dumps(asdict(result))
+
+
+def judge_result_from_json(raw: str) -> SessionJudgeResult:
+    """Deserialize a stored judge review payload."""
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("judge review payload must be a JSON object")
+    return SessionJudgeResult(
+        session_id=str(payload["session_id"]),
+        llm_judge_score=payload.get("llm_judge_score"),
+        narrative=str(payload.get("narrative", "")),
+        grade_result_count=int(payload.get("grade_result_count", 0)),
+        review_status=payload.get("review_status", "confirmed"),
+        review_reason=payload.get("review_reason"),
+    )
+
+
+async def store_pending_judge_review(
+    db: AsyncSession,
+    session: AssessmentSession,
+    result: SessionJudgeResult,
+) -> None:
+    """Mark a session for admin review and persist the judge snapshot."""
+    session.status = "pending_review"
+    session.judge_review_json = judge_result_to_json(result)
+    db.add(session)
+    await db.flush()
+    _logger.info(
+        "judge_review_pending",
+        session_id=session.id,
+        review_reason=result.review_reason,
+    )
 
 
 async def run_session_judge(
@@ -121,6 +176,8 @@ async def run_session_judge(
 
     llm_judge_score: float | None = None
     narrative: str = ""
+    review_status: JudgeReviewStatus = "confirmed"
+    review_reason: str | None = None
     settings = get_settings()
     model = settings.LITELLM_MODEL
 
@@ -146,7 +203,14 @@ async def run_session_judge(
         score_val = parsed.get("overall_score")
         if isinstance(score_val, (int, float)):
             llm_judge_score = max(0.0, min(1.0, float(score_val)))
-        narrative = parsed.get("narrative", "")
+        narrative = str(parsed.get("narrative", ""))
+        grading_consistent = parsed.get("grading_consistent")
+        if grading_consistent is False:
+            review_status = "pending_admin_review"
+            reason = parsed.get("review_reason")
+            review_reason = (
+                str(reason).strip() if reason else "Grading inconsistency detected"
+            )
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
             "session_judge_llm_failed",
@@ -178,6 +242,7 @@ async def run_session_judge(
         session_id=session_id,
         grade_result_count=len(rows),
         llm_judge_score=llm_judge_score,
+        review_status=review_status,
         llm_sourced=llm_judge_score != avg if avg is not None else True,
     )
 
@@ -186,6 +251,8 @@ async def run_session_judge(
         llm_judge_score=llm_judge_score,
         narrative=narrative,
         grade_result_count=len(rows),
+        review_status=review_status,
+        review_reason=review_reason,
     )
 
 
@@ -193,16 +260,8 @@ async def persist_session_judge_result(
     db: AsyncSession,
     result: SessionJudgeResult,
 ) -> None:
-    """Write judge output onto every grade_results row for the session.
-
-    Args:
-        db: Active async database session.
-        result: The judge result to persist.
-
-    Returns:
-        None.
-    """
-    if result.llm_judge_score is None:
+    """Write judge output onto every grade_results row for the session."""
+    if result.review_status != "confirmed" or result.llm_judge_score is None:
         return
     rows = (
         (
@@ -227,4 +286,37 @@ async def persist_session_judge_result(
     )
 
 
-__all__ = ["SessionJudgeResult", "persist_session_judge_result", "run_session_judge"]
+async def approve_pending_judge_review(
+    db: AsyncSession,
+    session: AssessmentSession,
+) -> SessionJudgeResult:
+    """Admin approves a held judge review and finalizes grading."""
+    if session.status != "pending_review" or not session.judge_review_json:
+        raise ValueError("session is not awaiting judge review")
+    result = judge_result_from_json(session.judge_review_json)
+    confirmed = SessionJudgeResult(
+        session_id=result.session_id,
+        llm_judge_score=result.llm_judge_score,
+        narrative=result.narrative,
+        grade_result_count=result.grade_result_count,
+        review_status="confirmed",
+        review_reason=None,
+    )
+    await persist_session_judge_result(db, confirmed)
+    session.status = "completed"
+    session.judge_review_json = None
+    db.add(session)
+    await db.flush()
+    _logger.info("judge_review_approved", session_id=session.id)
+    return confirmed
+
+
+__all__ = [
+    "SessionJudgeResult",
+    "approve_pending_judge_review",
+    "judge_result_from_json",
+    "judge_result_to_json",
+    "persist_session_judge_result",
+    "run_session_judge",
+    "store_pending_judge_review",
+]
