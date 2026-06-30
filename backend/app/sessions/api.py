@@ -281,10 +281,19 @@ async def complete_session(
         learner_email = profile.get("email") or None
     except Exception:  # noqa: BLE001
         learner_email = None
-    schedule_post_completion_pipeline(
-        session_id=session.id,
-        learner_email=learner_email,
-    )
+    # Scheduling must never fail the learner's completion: if the Celery
+    # broker is unreachable, log and continue rather than 500 the request.
+    try:
+        schedule_post_completion_pipeline(
+            session_id=session.id,
+            learner_email=learner_email,
+        )
+    except Exception as exc:  # noqa: BLE001 - broker outage must not break completion
+        _logger.warning(
+            "post_completion_pipeline_schedule_failed",
+            session_id=session.id,
+            error=str(exc),
+        )
 
     return await _to_session_read(db, session)
 
