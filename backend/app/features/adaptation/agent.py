@@ -11,7 +11,8 @@ import uuid
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import get_settings
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.llm_json import extract_json, extract_llm_text, prefers_raw_json_model
 from app.core.logging import get_logger
 from app.core.metrics import record_llm_call
@@ -58,7 +59,14 @@ async def run_adaptation(
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=user_message),
             ],
-            config={"callbacks": callbacks},
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(
+                    session_id=str(session_id),
+                    operation="adaptation",
+                    tool=answers[0].tool if answers else None,
+                ),
+            ),
         )
         record_llm_call(model, "adaptation", "success", time.perf_counter() - start)
     except Exception:

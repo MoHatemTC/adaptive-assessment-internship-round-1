@@ -10,6 +10,8 @@ Tracing and metrics responsibilities:
 
 * :func:`get_llm_with_tracing` is the canonical entry point for agent nodes. It
   returns ``(llm, callbacks)`` where ``callbacks`` carries the Langfuse handler.
+  Pass :func:`app.core.tracing.llm_invoke_config` as the invoke ``config`` so
+  traces include ``session_id``, tool, and operation tags via Langfuse metadata.
   It is intentionally *pure* — it builds the objects and makes no model call.
 * Because the kernel does not intercept node invocations, **agent nodes are
   responsible for calling** :func:`app.core.metrics.record_llm_call` after their
@@ -40,6 +42,7 @@ from tenacity import (
 from app.config import get_settings
 from app.core.logging import get_logger
 from app.core.metrics import record_llm_call
+from app.core.tracing import LangfuseTraceContext, llm_invoke_config
 
 _logger = get_logger(__name__)
 
@@ -201,8 +204,10 @@ async def test_llm_connection() -> bool:
 
 
 __all__ = [
+    "LangfuseTraceContext",
     "get_llm",
     "get_langfuse_callback",
     "get_llm_with_tracing",
+    "llm_invoke_config",
     "test_llm_connection",
 ]

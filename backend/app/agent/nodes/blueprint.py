@@ -21,7 +21,8 @@ import time
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import get_settings
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.logging import get_logger
 from app.core.metrics import record_llm_call
 from app.shared.schemas.blueprint import Blueprint
@@ -141,7 +142,10 @@ async def run_planner(
                 SystemMessage(content=PLANNER_SYSTEM_PROMPT),
                 HumanMessage(content=user_message),
             ],
-            config={"callbacks": callbacks},
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(operation="planner"),
+            ),
         )
         record_llm_call(model, "planner", "success", time.perf_counter() - start)
     except Exception:

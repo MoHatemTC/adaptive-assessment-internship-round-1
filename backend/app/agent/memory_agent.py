@@ -28,7 +28,8 @@ from sqlalchemy import select
 from typing_extensions import Annotated, TypedDict
 
 from app.core.database import async_session
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.logging import get_logger
 from app.sessions.models import MemoryCard as MemoryCardModel
 from app.shared.schemas.memory import (
@@ -200,7 +201,15 @@ async def extract_card_node(state: MemoryAgentState) -> dict[str, Any]:
                 SystemMessage(content=_EXTRACT_SYSTEM),
                 HumanMessage(content=human_content),
             ],
-            config={"callbacks": callbacks},
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(
+                    session_id=state["session_id"],
+                    operation="memory_extract",
+                    tool=state["tool_type"],
+                    question_index=state["question_index"],
+                ),
+            ),
         )
 
         # Kimi K2 returns a list of thinking blocks + final answer string.
@@ -433,7 +442,15 @@ async def summarize_memory_node(state: MemoryAgentState) -> dict[str, Any]:
                     content=_SUMMARIZE_HUMAN_TEMPLATE.format(cards_text=cards_text)
                 ),
             ],
-            config={"callbacks": callbacks},
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(
+                    session_id=state.get("session_id"),
+                    operation="memory_summarize",
+                    tool=state.get("tool_type"),
+                    question_index=state.get("question_index"),
+                ),
+            ),
         )
         # Kimi K2 returns a list of thinking blocks + final answer string.
         # Use reversed() to find the last plain string (the actual answer).

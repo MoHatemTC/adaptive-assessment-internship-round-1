@@ -18,7 +18,8 @@ import time
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import get_settings
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.logging import get_logger
 from app.core.metrics import record_llm_call
 from app.shared.schemas.memory import AdaptiveContract
@@ -145,7 +146,15 @@ async def generate_diagram_question(
                 SystemMessage(content=_SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
             ],
-            config={"callbacks": callbacks},
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(
+                    session_id=getattr(contract, "session_id", None),
+                    operation="diagram_generation",
+                    tool="diagram",
+                    question_index=getattr(contract, "question_index", None),
+                ),
+            ),
         )
         record_llm_call(
             model, "diagram_generation", "success", time.perf_counter() - start
