@@ -219,7 +219,8 @@ def schedule_post_completion_pipeline(
     """Chain report build then email (called from complete_session)."""
     settings = get_settings()
     admin_email = settings.ADMIN_REPORT_EMAIL.strip() or None
-    build = celery_app.signature("reports.build_session_radar", args=[session_id])
+    judge = celery_app.signature("reports.run_session_judge", args=[session_id])
+    build = celery_app.signature("reports.build_session_radar")
     email = celery_app.signature(
         "reports.email_session_report",
         kwargs={
@@ -227,7 +228,7 @@ def schedule_post_completion_pipeline(
             "admin_email": admin_email,
         },
     )
-    (build | email).apply_async()
+    (judge | build | email).apply_async()
 
 
 def schedule_finalize_after_judge_approval(

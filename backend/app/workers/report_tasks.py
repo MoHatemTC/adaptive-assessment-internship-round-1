@@ -1,9 +1,9 @@
-"""Celery tasks: build radar report after session completion."""
+"""Celery tasks: session judge and radar report build (split chain)."""
 
 from __future__ import annotations
 
 import asyncio
-import json
+from typing import Any
 
 from app.core.database import async_session
 from app.core.logging import get_logger
@@ -16,26 +16,23 @@ def _run_async(coro):
     return asyncio.run(coro)
 
 
-def _learner_email_from_profile(raw: str) -> str | None:
-    try:
-        profile = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(profile, dict):
-        return None
-    email = profile.get("email")
-    return email if isinstance(email, str) and email.strip() else None
+def _session_id_from_pipeline_state(pipeline_state: dict[str, Any] | str) -> str:
+    if isinstance(pipeline_state, str):
+        return pipeline_state
+    session_id = pipeline_state.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("pipeline state missing session_id")
+    return session_id
 
 
-@celery_app.task(name="reports.build_session_radar")
-def build_session_radar_report(session_id: str) -> dict[str, str]:
-    """Build radar report for a completed session after judge validation."""
+@celery_app.task(name="reports.run_session_judge")
+def run_session_judge_task(session_id: str) -> dict[str, str]:
+    """Run the LLM judge for a completed session (isolated from report build)."""
     from app.agent.nodes.judge import (
         persist_session_judge_result,
         run_session_judge,
         store_pending_judge_review,
     )
-    from app.reports.service import build_session_radar_report as _build
     from app.sessions.models import AssessmentSession
 
     async def _inner() -> dict[str, str]:
@@ -55,6 +52,31 @@ def build_session_radar_report(session_id: str) -> dict[str, str]:
                 }
 
             await persist_session_judge_result(db, judge)
+            await db.commit()
+            return {"session_id": session_id, "status": "confirmed"}
+
+    try:
+        payload = _run_async(_inner())
+        _logger.info("judge_task_complete", **payload)
+        return payload
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception("judge_task_failed", session_id=session_id, error=str(exc))
+        raise
+
+
+@celery_app.task(name="reports.build_session_radar")
+def build_session_radar_report(pipeline_state: dict[str, str] | str) -> dict[str, str]:
+    """Build radar report after judge confirmation (or pass-through on HITL hold)."""
+    from app.reports.service import build_session_radar_report as _build
+
+    session_id = _session_id_from_pipeline_state(pipeline_state)
+    if isinstance(pipeline_state, dict) and pipeline_state.get("status") == (
+        "pending_admin_review"
+    ):
+        return pipeline_state
+
+    async def _inner() -> dict[str, str]:
+        async with async_session() as db:
             report = await _build(db, session_id)
             await db.commit()
             payload = report.model_dump(mode="json")
@@ -63,7 +85,7 @@ def build_session_radar_report(session_id: str) -> dict[str, str]:
 
     try:
         payload = _run_async(_inner())
-        _logger.info("report_task_complete", **payload)
+        _logger.info("report_task_complete", session_id=session_id, status=payload.get("status"))
         return payload
     except Exception as exc:  # noqa: BLE001
         _logger.exception("report_task_failed", session_id=session_id, error=str(exc))
@@ -73,27 +95,11 @@ def build_session_radar_report(session_id: str) -> dict[str, str]:
 @celery_app.task(name="reports.finalize_approved_session")
 def finalize_approved_session_report(session_id: str) -> dict[str, str]:
     """Build radar report after admin approves a held judge review."""
-    from app.reports.service import build_session_radar_report as _build
-
-    async def _inner() -> dict[str, str]:
-        async with async_session() as db:
-            report = await _build(db, session_id)
-            await db.commit()
-            return {
-                "session_id": session_id,
-                "status": "built",
-                "overall_score": str(report.overall_score),
-            }
-
-    try:
-        payload = _run_async(_inner())
-        _logger.info("approved_report_task_complete", **payload)
-        return payload
-    except Exception as exc:  # noqa: BLE001
-        _logger.exception(
-            "approved_report_task_failed", session_id=session_id, error=str(exc)
-        )
-        raise
+    return build_session_radar_report(session_id)
 
 
-__all__ = ["build_session_radar_report", "finalize_approved_session_report"]
+__all__ = [
+    "build_session_radar_report",
+    "finalize_approved_session_report",
+    "run_session_judge_task",
+]

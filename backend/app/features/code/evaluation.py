@@ -1,27 +1,25 @@
 """Layer 2 — Memory card extraction.
 
-Turns one graded submission into an evidence card. Writes the shared
-``memory_cards`` row (input to Layer 3) plus the coding-tool ``code_memory_cards``
-detail row, and returns a :class:`MemoryCardRead`.
-
-The coding tool always engages the ``thinking``, ``work`` and ``digital_ai``
-dimensions; ``soft`` and ``growth`` are not exercised by a code submission.
+Turns one graded submission into an evidence card via the shared memory agent
+(Qdrant upsert included). Persists the coding-tool ``code_memory_cards`` detail
+row linked to the platform ``memory_cards`` row.
 """
 
 from __future__ import annotations
 
 import json
+from typing import cast
 
 from fastapi import HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.agent.memory_agent import run_memory_agent
 from app.core.logging import get_logger
-from app.features.code.models import CodeMemoryCard, CodeSubmission
+from app.features.code.models import CodeChallenge, CodeMemoryCard, CodeSubmission
 from app.sessions.models import GradeResult, MemoryCard
 from app.shared.schemas.memory import (
-    DimensionSignals,
-    MemoryCardCreate,
+    DifficultyLevel,
     MemoryCardRead,
     RubricScores,
 )
@@ -32,7 +30,6 @@ TOOL_TYPE = "coding"
 
 
 def _dimension_feedback(rubric: RubricScores, name: str) -> str:
-    """Return the feedback for a named rubric dimension, or empty string."""
     for dim in rubric.dimensions:
         if dim.name == name:
             return dim.feedback
@@ -40,7 +37,6 @@ def _dimension_feedback(rubric: RubricScores, name: str) -> str:
 
 
 def _dimension_score(rubric: RubricScores, name: str, default: float = 0.0) -> float:
-    """Return the score for a named rubric dimension, or ``default``."""
     for dim in rubric.dimensions:
         if dim.name == name:
             return dim.score
@@ -54,11 +50,6 @@ def _build_evidence_summary(
     approach_feedback: str,
     efficiency_feedback: str,
 ) -> str:
-    """Compose a concise, human-readable evidence summary for the card.
-
-    Deterministic — derived from the Layer 1 rubric rather than a second LLM
-    call, so memory extraction stays cheap and reproducible.
-    """
     verdict = "passed" if passed else "did not pass"
     return (
         f"Submission {verdict} with sandbox correctness {sandbox_score:.0%}. "
@@ -74,25 +65,7 @@ async def extract_memory_card(
     grade_result_id: int,
     difficulty: str,
 ) -> MemoryCardRead:
-    """Extract a memory card from a graded code submission.
-
-    Reads the ``grade_results`` row and its originating submission, then writes
-    one ``memory_cards`` row (platform) and one ``code_memory_cards`` row
-    (coding detail), linked by ``memory_card_id``.
-
-    Args:
-        db: Active async database session.
-        session_id: Platform assessment session UUID.
-        question_index: Zero-based position in the assessment blueprint.
-        grade_result_id: PK of the ``grade_results`` row produced by Layer 1.
-    difficulty: Question difficulty.
-
-    Returns:
-        A :class:`MemoryCardRead` view of the persisted platform card.
-
-    Raises:
-        HTTPException: 404 if the grade result or its submission is missing.
-    """
+    """Extract a memory card from a graded code submission via the memory agent."""
     grade = await db.get(GradeResult, grade_result_id)
     if grade is None:
         raise HTTPException(
@@ -109,6 +82,13 @@ async def extract_memory_card(
             status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found"
         )
 
+    challenge = await db.get(CodeChallenge, submission.challenge_id)
+    question_text = (
+        f"{challenge.title}\n\n{challenge.description}"
+        if challenge is not None
+        else "Coding challenge"
+    )
+
     rubric = RubricScores.model_validate_json(grade.rubric_scores)
     sandbox_score = _dimension_score(rubric, "correctness")
     approach_feedback = _dimension_feedback(rubric, "approach")
@@ -121,48 +101,27 @@ async def extract_memory_card(
         "test_results", []
     )
 
-    signals = DimensionSignals(
-        thinking=True,
-        soft=False,
-        work=True,
-        digital_ai=True,
-        growth=False,
-    )
-    evidence_summary = _build_evidence_summary(
-        passed=passed,
-        sandbox_score=sandbox_score,
-        approach_feedback=approach_feedback,
-        efficiency_feedback=efficiency_feedback,
-    )
-
-    # Validate the shared card shape (incl. difficulty literal) before persisting.
-    card_in = MemoryCardCreate(
+    new_card, _memory_summary = await run_memory_agent(
         session_id=session_id,
         tool_type=TOOL_TYPE,
         question_index=question_index,
-        difficulty=difficulty,  # type: ignore[arg-type]
-        evidence_summary=evidence_summary,
-        dimension_signals=signals,
+        question_text=question_text,
+        learner_response=submission.submitted_code,
+        rubric_scores_json=grade.rubric_scores,
         passed=passed,
+        difficulty=cast(DifficultyLevel, difficulty),
     )
-
-    memory_card = MemoryCard(
-        session_id=card_in.session_id,
-        tool_type=card_in.tool_type,
-        question_index=card_in.question_index,
-        difficulty=card_in.difficulty,
-        evidence_summary=card_in.evidence_summary,
-        dimension_signals=card_in.dimension_signals.model_dump_json(),
-        passed=card_in.passed,
-    )
-    db.add(memory_card)
-    await db.flush()
+    if new_card is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Memory agent failed to extract code evidence card",
+        )
 
     detail = CodeMemoryCard(
         session_id=session_id,
         question_index=question_index,
         submission_id=submission.id or 0,
-        memory_card_id=memory_card.id,
+        memory_card_id=new_card.id,
         sandbox_score=sandbox_score,
         overall_rubric_score=rubric.overall,
         test_results=json.dumps(structured_test_results),
@@ -171,25 +130,31 @@ async def extract_memory_card(
     )
     db.add(detail)
     await db.flush()
-    await db.refresh(memory_card)
+
+    memory_card = await db.get(MemoryCard, new_card.id)
+    if memory_card is not None:
+        await db.refresh(memory_card)
+        created_at = memory_card.created_at
+    else:
+        created_at = new_card.created_at
 
     _logger.info(
         "code_memory_card_extracted",
         session_id=session_id,
         question_index=question_index,
-        memory_card_id=memory_card.id,
+        memory_card_id=new_card.id,
         passed=passed,
     )
     return MemoryCardRead(
-        id=memory_card.id,
-        session_id=card_in.session_id,
-        tool_type=card_in.tool_type,
-        question_index=card_in.question_index,
-        difficulty=card_in.difficulty,
-        evidence_summary=card_in.evidence_summary,
-        dimension_signals=card_in.dimension_signals,
-        passed=card_in.passed,
-        created_at=memory_card.created_at,
+        id=new_card.id,
+        session_id=new_card.session_id,
+        tool_type=new_card.tool_type,
+        question_index=new_card.question_index,
+        difficulty=new_card.difficulty,
+        evidence_summary=new_card.evidence_summary,
+        dimension_signals=new_card.dimension_signals,
+        passed=new_card.passed,
+        created_at=created_at,
     )
 
 
@@ -198,7 +163,8 @@ async def refresh_memory_card_for_grade(
     grade_result_id: int,
     difficulty: str,
 ) -> None:
-    """Update an existing memory card after deferred LLM grading completes."""
+    """Update code detail + platform evidence summary after deferred LLM grading."""
+    del difficulty  # retained for call-site compatibility
     grade = await db.get(GradeResult, grade_result_id)
     if grade is None:
         raise HTTPException(

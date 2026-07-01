@@ -203,8 +203,14 @@ async def test_llm_connection() -> bool:
     return True
 
 
+def get_langfuse_client() -> Langfuse:
+    """Return the process-wide Langfuse client (for non-LangChain observations)."""
+    return _init_langfuse()
+
+
 __all__ = [
     "LangfuseTraceContext",
+    "get_langfuse_client",
     "get_llm",
     "get_langfuse_callback",
     "get_llm_with_tracing",
