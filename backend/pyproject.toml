@@ -13,12 +13,17 @@ reportMissingModuleSource = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "deepeval: opt-in G-Eval LLM judge tests (set RUN_DEEPEVAL=1)",
+    "integration: live external service tests",
+]
 
 [dependency-groups]
 dev = [
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
     "celery>=5.6.3",
+    "deepeval>=0.20.30",
     "deepgram-sdk>=7.3.1",
     "fastapi>=0.137.1",
     "httpx>=0.28.1",

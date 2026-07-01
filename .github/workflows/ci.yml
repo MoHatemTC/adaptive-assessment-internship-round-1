@@ -67,7 +67,7 @@ jobs:
         working-directory: backend
       - name: Run backend tests
         working-directory: backend
-        run: pytest tests/ -q --ignore=tests/integration
+        run: pytest tests/ -q --ignore=tests/integration --ignore=tests/evals
 
   frontend:
     runs-on: ubuntu-latest
