@@ -6,7 +6,6 @@ import asyncio
 import os
 from typing import Any
 
-from app.core.background_tasks import schedule_background
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.features.mcq.analysis import analyze_mcq_session
@@ -215,22 +214,35 @@ def schedule_mcq_post_answer(
     total_questions: int,
     force: bool = False,
 ) -> None:
-    schedule_background(
-        _run_post_answer_pipeline(
+    from app.workers.pipeline_dispatch import dispatch_pipeline_task
+
+    dispatch_pipeline_task(
+        "pipelines.mcq.post_answer",
+        kwargs={
+            "session_id": session_id,
+            "question_index": question_index,
+            "mcq_response_id": mcq_response_id,
+            "total_questions": total_questions,
+        },
+        background_coro=_run_post_answer_pipeline(
             session_id=session_id,
             question_index=question_index,
             mcq_response_id=mcq_response_id,
             total_questions=total_questions,
         ),
-        key=f"mcq:post:{session_id}",
+        background_key=f"mcq:post:{session_id}",
         force=force,
     )
 
 
 def schedule_mcq_start(*, session_id: str, force: bool = False) -> None:
-    schedule_background(
-        _run_start_pipeline(session_id=session_id),
-        key=f"mcq:start:{session_id}",
+    from app.workers.pipeline_dispatch import dispatch_pipeline_task
+
+    dispatch_pipeline_task(
+        "pipelines.mcq.start",
+        kwargs={"session_id": session_id},
+        background_coro=_run_start_pipeline(session_id=session_id),
+        background_key=f"mcq:start:{session_id}",
         force=force,
     )
 

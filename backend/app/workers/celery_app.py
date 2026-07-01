@@ -25,6 +25,7 @@ celery_app.conf.update(
     include=[
         "app.workers.report_tasks",
         "app.workers.email_tasks",
+        "app.workers.pipeline_tasks",
     ],
 )
 
