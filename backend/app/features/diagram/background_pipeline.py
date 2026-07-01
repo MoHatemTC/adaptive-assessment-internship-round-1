@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
+from app.config import get_settings
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.features.diagram.evaluation import evaluate_diagram_answer
@@ -22,27 +22,13 @@ from app.features.diagram.models import DiagramQuestion, DiagramResponse
 
 _logger = get_logger(__name__)
 
-_DEFAULT_GENERATION_TIMEOUT_SECONDS = 120
-
 
 def async_pipeline_enabled() -> bool:
-    return os.environ.get("DIAGRAM_ASYNC_PIPELINE", "true").lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    return get_settings().DIAGRAM_ASYNC_PIPELINE
 
 
 def _generation_timeout_seconds() -> float:
-    raw = os.environ.get(
-        "DIAGRAM_GENERATION_TIMEOUT_SECONDS",
-        str(_DEFAULT_GENERATION_TIMEOUT_SECONDS),
-    )
-    try:
-        return max(30.0, float(raw))
-    except ValueError:
-        return float(_DEFAULT_GENERATION_TIMEOUT_SECONDS)
+    return max(30.0, float(get_settings().DIAGRAM_GENERATION_TIMEOUT_SECONDS))
 
 
 async def _mark_diagram_failed(

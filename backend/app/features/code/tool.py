@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from app.config import get_settings
 from app.core.base_tool import BaseTool
 from app.core.database import async_session
 from app.features.code.languages import build_runner_script, runner_path, solution_path
@@ -101,7 +101,7 @@ def _sandbox_error_results(
 
 def _use_local_sandbox_fallback() -> bool:
     """Allow local execution when cloud sandbox is unavailable (dev only)."""
-    return os.environ.get("ENVIRONMENT", "development") == "development"
+    return get_settings().is_development
 
 
 def _create_e2b_sandbox(timeout_seconds: int, api_key: str):
@@ -250,7 +250,7 @@ def _run_in_sandbox(
     *,
     language: str,
 ) -> tuple[ExecutionOutcome, list[TestCaseResult], str | None]:
-    api_key = os.environ.get("E2B_API_KEY", "")
+    api_key = get_settings().E2B_API_KEY.get_secret_value()
     if not api_key:
         return _run_locally(
             submitted_code,

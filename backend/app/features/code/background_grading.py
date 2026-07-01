@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import os
-
+from app.config import get_settings
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.features.code import evaluation, grading
@@ -13,12 +12,7 @@ _logger = get_logger(__name__)
 
 def async_grading_enabled() -> bool:
     """Return True when sandbox-first submit with deferred LLM grading is enabled."""
-    return os.environ.get("CODE_ASYNC_GRADING", "true").lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    return get_settings().CODE_ASYNC_GRADING
 
 
 async def run_llm_grade_upgrade(

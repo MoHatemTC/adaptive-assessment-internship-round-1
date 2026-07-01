@@ -100,21 +100,26 @@ class TestToolExecution:
             expected_output="a",
             execution_time_ms=1.0,
         )
-        with patch.dict(os.environ, {}, clear=True):
-            with patch(
+        settings = MagicMock()
+        settings.E2B_API_KEY.get_secret_value.return_value = ""
+        settings.is_development = True
+        with (
+            patch("app.features.code.tool.get_settings", return_value=settings),
+            patch(
                 "app.features.code.tool._run_locally",
                 return_value=(ExecutionOutcome.SUCCESS, [expected_result], None),
-            ) as mock_local:
-                outcome, results, error = await tool.execute_submission(
-                    "def solution(s): return s",
-                    [
-                        CodeTestCaseDTO(
-                            id="1",
-                            input="print(solution('a'))",
-                            expected_output="a",
-                        )
-                    ],
-                )
+            ) as mock_local,
+        ):
+            outcome, results, error = await tool.execute_submission(
+                "def solution(s): return s",
+                [
+                    CodeTestCaseDTO(
+                        id="1",
+                        input="print(solution('a'))",
+                        expected_output="a",
+                    )
+                ],
+            )
         mock_local.assert_called_once()
         assert outcome == ExecutionOutcome.SUCCESS
         assert results == [expected_result]
