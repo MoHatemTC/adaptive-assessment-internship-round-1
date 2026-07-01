@@ -7,12 +7,17 @@ the :class:`~app.shared.schemas.memory.AdaptiveContract` handed to the next loop
 iteration.
 """
 
+import time
+
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.core.llm import get_llm
+from app.config import get_settings
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
 from app.core.logging import get_logger
+from app.core.metrics import record_llm_call
+from app.core.tracing import LangfuseTraceContext
 from app.shared.schemas.memory import AdaptiveContract, DifficultyLevel
 
 logger = get_logger(__name__)
@@ -105,6 +110,8 @@ async def generate_next_voice_question(
     current_question_index: int,
     memory_summary: str,
     prior_questions: list[str] | None = None,
+    *,
+    session_id: str | None = None,
 ) -> tuple[str, str, str]:
     """Generate the next voice interview question with the LLM.
 
@@ -194,13 +201,28 @@ Use this context to calibrate question difficulty and topic relevance.
         )
 
     try:
-        llm = get_llm()
+        settings = get_settings()
+        model = settings.LITELLM_MODEL
+        llm, callbacks = get_llm_with_tracing(model)
         # Generate at temperature 0.7 for varied, non-repetitive questions.
         if hasattr(llm, "temperature"):
             llm.temperature = 0.7
         logger.info("llm_generation_temperature", temperature=0.7)
+        start = time.perf_counter()
         response = await llm.ainvoke(
-            [SystemMessage(content=system), HumanMessage(content=human)]
+            [SystemMessage(content=system), HumanMessage(content=human)],
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(
+                    session_id=session_id or "voice",
+                    operation="voice_question_gen",
+                    tool="voice",
+                    question_index=current_question_index,
+                ),
+            ),
+        )
+        record_llm_call(
+            model, "voice_question_gen", "success", time.perf_counter() - start
         )
         raw_content = response.content
         if isinstance(raw_content, list):
@@ -228,6 +250,8 @@ Use this context to calibrate question difficulty and topic relevance.
         )
         return question_text, next_diff, follow_up_depth
     except Exception as e:  # noqa: BLE001 - generation must degrade, never raise
+        settings = get_settings()
+        record_llm_call(settings.LITELLM_MODEL, "voice_question_gen", "error", 0.0)
         logger.error("question_generation_failed", error=str(e))
         fallback_list = _FALLBACKS.get(next_diff, _FALLBACKS["intermediate"])
         idx = len(prior_questions or []) % len(fallback_list)

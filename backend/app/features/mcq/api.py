@@ -107,6 +107,10 @@ async def submit_mcq_answer(
     payload: MCQSubmitRequest,
     db: AsyncSession = Depends(get_db),
 ) -> MCQSubmitResponse:
+    if payload.session_id:
+        from app.proctoring.enforcement import ensure_tool_session_allowed
+
+        await ensure_tool_session_allowed(db, payload.session_id)
     await build_submit_response(
         db=db,
         question_id=payload.question_id,

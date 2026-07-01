@@ -81,6 +81,9 @@ async def create_voice_interview(
     Returns:
         The newly created session serialized as :class:`VoiceSessionRead`.
     """
+    from app.proctoring.enforcement import ensure_tool_session_allowed
+
+    await ensure_tool_session_allowed(db, payload.session_id)
     voice_session = await create_voice_session(
         db=db,
         session_id=payload.session_id,
@@ -115,15 +118,22 @@ async def stream_voice_audio(
     """
     await websocket.accept()
 
-    # Start the session and read its time limit for the streaming deadline.
+    # Enforce proctoring readiness, then start the session and read its time limit.
     try:
         async with async_session() as db:
+            from app.proctoring.enforcement import ensure_tool_session_allowed
+
+            voice_session = await get_voice_session(db, voice_session_id)
+            await ensure_tool_session_allowed(db, voice_session.session_id)
             voice_session = await start_voice_session(db, voice_session_id)
             time_limit = voice_session.time_limit_seconds
             await db.commit()
-    except HTTPException:
+    except HTTPException as exc:
         _logger.warning(
-            "voice_stream_session_not_found", voice_session_id=voice_session_id
+            "voice_stream_rejected",
+            voice_session_id=voice_session_id,
+            status_code=exc.status_code,
+            detail=exc.detail,
         )
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -303,6 +313,7 @@ async def start_adaptive_voice_session(
 async def process_voice_session(
     voice_session_id: int,
     payload: VoiceAdaptiveInput,
+    db: AsyncSession = Depends(get_db),
 ) -> VoiceAdaptivePublicResponse:
     """Run the full adaptive loop for a completed voice session.
 
@@ -323,13 +334,14 @@ async def process_voice_session(
     Raises:
         HTTPException: 422 if ``voice_session_id`` in path does not match body.
     """
-    from fastapi import HTTPException
-
     if payload.voice_session_id != voice_session_id:
         raise HTTPException(
             status_code=422,
             detail="voice_session_id mismatch between path and body",
         )
+    from app.proctoring.enforcement import ensure_tool_session_allowed
+
+    await ensure_tool_session_allowed(db, payload.session_id)
     from app.features.voice.loop import run_voice_adaptive_loop
 
     full_output = await run_voice_adaptive_loop(payload)
