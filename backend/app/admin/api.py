@@ -18,6 +18,8 @@ from app.admin.schemas import (
     AssessmentRead,
     AssessmentUpdate,
     BlueprintGenerateResponse,
+    JudgeReviewListItem,
+    JudgeReviewRead,
     TokenResponse,
 )
 from app.agent.nodes.blueprint import run_planner
@@ -25,8 +27,15 @@ from app.config import get_settings
 from app.core.deps import RateLimitedRoute, get_current_admin, get_db
 from app.core.security import create_access_token, credentials_exception
 from app.shared.schemas.proctoring import SessionIntegritySnapshot
+from app.sessions.models import AssessmentSession
 
 router = APIRouter(tags=["admin"], route_class=RateLimitedRoute)
+
+
+def _learner_name_from_profile(raw: str) -> str:
+    profile = _parse_json_field(raw)
+    name = profile.get("name")
+    return name if isinstance(name, str) and name.strip() else "Learner"
 
 
 def _parse_json_field(raw: str) -> dict[str, Any]:
@@ -282,3 +291,133 @@ async def get_session_integrity_summary(
     from app.proctoring.enforcement import get_integrity_snapshot_for_admin
 
     return await get_integrity_snapshot_for_admin(db, session_id)
+
+
+@router.get(
+    "/api/v1/admin/sessions/pending-review",
+    response_model=list[JudgeReviewListItem],
+)
+async def list_pending_judge_reviews(
+    request: Request,
+    assessment_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _admin: dict[str, Any] = Depends(get_current_admin),
+) -> list[JudgeReviewListItem]:
+    """List sessions awaiting admin approval of judge/grading results."""
+    stmt = select(AssessmentSession).where(
+        AssessmentSession.status == "pending_review",
+    )
+    if assessment_id:
+        stmt = stmt.where(AssessmentSession.assessment_id == assessment_id)
+    stmt = stmt.order_by(AssessmentSession.completed_at.desc())
+    rows = (await db.exec(stmt)).all()
+    items: list[JudgeReviewListItem] = []
+    for row in rows:
+        reason = None
+        if row.judge_review_json:
+            try:
+                from app.agent.nodes.judge import judge_result_from_json
+
+                review = judge_result_from_json(row.judge_review_json)
+                reason = review.review_reason
+            except (ValueError, json.JSONDecodeError):
+                reason = "Judge review data unavailable"
+        items.append(
+            JudgeReviewListItem(
+                session_id=row.id,
+                assessment_id=row.assessment_id,
+                learner_name=_learner_name_from_profile(row.learner_profile_json),
+                review_reason=reason,
+                completed_at=row.completed_at,
+            )
+        )
+    return items
+
+
+@router.get(
+    "/api/v1/admin/sessions/{session_id}/judge-review",
+    response_model=JudgeReviewRead,
+)
+async def get_judge_review(
+    request: Request,
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin: dict[str, Any] = Depends(get_current_admin),
+) -> JudgeReviewRead:
+    """Return the held judge review payload for admin inspection."""
+    from app.agent.nodes.judge import judge_result_from_json
+
+    session = await db.get(AssessmentSession, session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+    if session.status != "pending_review" or not session.judge_review_json:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Session is not awaiting judge review",
+        )
+    review = judge_result_from_json(session.judge_review_json)
+    return JudgeReviewRead(
+        session_id=session.id,
+        assessment_id=session.assessment_id,
+        learner_name=_learner_name_from_profile(session.learner_profile_json),
+        status=session.status,
+        review_status=review.review_status,
+        review_reason=review.review_reason,
+        llm_judge_score=review.llm_judge_score,
+        narrative=review.narrative,
+        grade_result_count=review.grade_result_count,
+    )
+
+
+@router.post(
+    "/api/v1/admin/sessions/{session_id}/judge-review/approve",
+    response_model=JudgeReviewRead,
+)
+async def approve_judge_review(
+    request: Request,
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin: dict[str, Any] = Depends(get_current_admin),
+) -> JudgeReviewRead:
+    """Approve held judge results, finalize grading, and release report/email."""
+    from app.agent.nodes.judge import approve_pending_judge_review
+    from app.workers.email_tasks import schedule_finalize_after_judge_approval
+
+    session = await db.get(AssessmentSession, session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+    try:
+        review = await approve_pending_judge_review(db, session)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    await db.commit()
+
+    profile = _parse_json_field(session.learner_profile_json)
+    learner_email = profile.get("email")
+    email = (
+        learner_email
+        if isinstance(learner_email, str) and learner_email.strip()
+        else None
+    )
+    schedule_finalize_after_judge_approval(session.id, learner_email=email)
+
+    return JudgeReviewRead(
+        session_id=session.id,
+        assessment_id=session.assessment_id,
+        learner_name=_learner_name_from_profile(session.learner_profile_json),
+        status=session.status,
+        review_status=review.review_status,
+        review_reason=review.review_reason,
+        llm_judge_score=review.llm_judge_score,
+        narrative=review.narrative,
+        grade_result_count=review.grade_result_count,
+    )

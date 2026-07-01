@@ -19,12 +19,28 @@ def _smtp_configured() -> bool:
 
 @celery_app.task(name="reports.email_session_report")
 def send_session_report_email(
-    session_id: str,
+    prior: dict[str, str] | str,
     *,
     learner_email: str | None = None,
     admin_email: str | None = None,
 ) -> dict[str, str]:
     """Email session summary after report build. Skips when SMTP is unset."""
+    if isinstance(prior, dict):
+        session_id = prior.get("session_id", "unknown")
+        if prior.get("status") == "pending_admin_review":
+            _logger.info(
+                "email_task_skipped",
+                reason="awaiting admin judge review",
+                session_id=session_id,
+            )
+            return {
+                "session_id": session_id,
+                "status": "skipped",
+                "reason": "pending_admin_review",
+            }
+    else:
+        session_id = prior
+
     if not _smtp_configured():
         _logger.warning("email_task_skipped", reason="SMTP not configured", session_id=session_id)
         return {"session_id": session_id, "status": "skipped", "reason": "smtp_not_configured"}
@@ -78,7 +94,6 @@ def schedule_post_completion_pipeline(
     email = celery_app.signature(
         "reports.email_session_report",
         kwargs={
-            "session_id": session_id,
             "learner_email": learner_email,
             "admin_email": admin_email,
         },
@@ -86,4 +101,29 @@ def schedule_post_completion_pipeline(
     (build | email).apply_async()
 
 
-__all__ = ["schedule_post_completion_pipeline", "send_session_report_email"]
+def schedule_finalize_after_judge_approval(
+    session_id: str,
+    *,
+    learner_email: str | None = None,
+) -> None:
+    """Chain report build + email after admin approves a held judge review."""
+    admin_email = os.environ.get("ADMIN_REPORT_EMAIL", "").strip() or None
+    finalize = celery_app.signature(
+        "reports.finalize_approved_session",
+        args=[session_id],
+    )
+    email = celery_app.signature(
+        "reports.email_session_report",
+        kwargs={
+            "learner_email": learner_email,
+            "admin_email": admin_email,
+        },
+    )
+    (finalize | email).apply_async()
+
+
+__all__ = [
+    "schedule_finalize_after_judge_approval",
+    "schedule_post_completion_pipeline",
+    "send_session_report_email",
+]

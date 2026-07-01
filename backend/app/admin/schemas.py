@@ -61,3 +61,25 @@ class AssessmentLinkResponse(BaseModel):
     shareable_link: str
     title: str
     status: str
+
+
+class JudgeReviewRead(BaseModel):
+    """Admin-facing snapshot of a session held for judge review."""
+
+    session_id: str
+    assessment_id: str
+    learner_name: str
+    status: str
+    review_status: str
+    review_reason: str | None = None
+    llm_judge_score: float | None = None
+    narrative: str = ""
+    grade_result_count: int = 0
+
+
+class JudgeReviewListItem(BaseModel):
+    session_id: str
+    assessment_id: str
+    learner_name: str
+    review_reason: str | None = None
+    completed_at: datetime | None = None
