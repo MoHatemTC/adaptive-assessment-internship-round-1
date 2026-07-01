@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import type { ToolQuestionMessage, NormalizedToolStep } from "@/types/chat";
+import type { SubmitResult, ToolQuestionMessage } from "@/types/chat";
 import { useChatStore } from "@/store/chatStore";
 import { useDiagramDriver } from "@/features/diagram/useDiagramDriver";
 
 interface ChatDiagramMessageProps {
   message: ToolQuestionMessage;
-  onAnswered: (step: NormalizedToolStep) => void;
+  onAnswered: (result: SubmitResult) => void;
 }
 
 export function ChatDiagramMessage({ message, onAnswered }: ChatDiagramMessageProps) {
@@ -32,9 +32,9 @@ export function ChatDiagramMessage({ message, onAnswered }: ChatDiagramMessagePr
     try {
       const qId = question.id;
       const ans = answer.trim();
-      const step = await driver.submit(qId, ans, driver.questionIndex);
+      const result = await driver.submit(qId, ans, driver.questionIndex);
       setSubmitting(false);
-      onAnswered(step);
+      onAnswered(result);
     } catch {
       setSubmitting(false);
     }

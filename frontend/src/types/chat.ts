@@ -24,11 +24,22 @@ export interface ToolQuestionMessage extends BaseChatMessage {
   payload: unknown;
 }
 
-export type ChatMessage = TextMessage | ToolQuestionMessage;
+export interface UserAnswerMessage extends BaseChatMessage {
+  kind: "user_answer";
+  tool: ToolType;
+  summary: string;
+}
+
+export type ChatMessage = TextMessage | ToolQuestionMessage | UserAnswerMessage;
 
 export interface NormalizedToolStep {
   tool: ToolType;
   isToolComplete: boolean;
   nextPayload: unknown | null;
   transitionText: string;
+}
+
+export interface SubmitResult {
+  answerMessage: UserAnswerMessage;
+  step: NormalizedToolStep;
 }

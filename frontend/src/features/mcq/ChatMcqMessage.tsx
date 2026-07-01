@@ -2,14 +2,14 @@
 
 import { useCallback } from "react";
 
-import type { ToolQuestionMessage, NormalizedToolStep } from "@/types/chat";
+import type { SubmitResult, ToolQuestionMessage } from "@/types/chat";
 import { useChatStore } from "@/store/chatStore";
 import McqCard from "@/features/mcq/McqCard";
 import { useMcqDriver } from "@/features/mcq/useMcqDriver";
 
 interface ChatMcqMessageProps {
   message: ToolQuestionMessage;
-  onAnswered: (step: NormalizedToolStep) => void;
+  onAnswered: (result: SubmitResult) => void;
 }
 
 export function ChatMcqMessage({ message, onAnswered }: ChatMcqMessageProps) {
@@ -21,8 +21,8 @@ export function ChatMcqMessage({ message, onAnswered }: ChatMcqMessageProps) {
   const handleSubmit = useCallback(
     async (questionId: number, selectedLabel: string) => {
       try {
-        const step = await driver.submit(questionId, selectedLabel);
-        onAnswered(step);
+        const result = await driver.submit(questionId, selectedLabel);
+        onAnswered(result);
       } catch {
         // error is surfaced via driver.error
       }

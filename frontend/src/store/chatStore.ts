@@ -18,6 +18,7 @@ export interface ChatState {
   isComplete: boolean;
 
   appendMessage: (msg: ChatMessage) => void;
+  pushUserAnswer: (tool: ToolType, summary: string) => string;
   pushToolQuestion: (
     tool: ToolType,
     payload: unknown,
@@ -51,6 +52,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   appendMessage: (msg) =>
     set((s) => ({ messages: [...s.messages, msg] })),
+
+  pushUserAnswer: (tool, summary) => {
+    const id = genId();
+    const msg: ChatMessage = {
+      id,
+      kind: "user_answer",
+      role: "user",
+      createdAt: Date.now(),
+      tool,
+      summary,
+    };
+    set((s) => ({ messages: [...s.messages, msg] }));
+    return id;
+  },
 
   pushToolQuestion: (tool, payload, questionIndex, totalForTool, difficulty, timeLimitSeconds) => {
     const id = genId();

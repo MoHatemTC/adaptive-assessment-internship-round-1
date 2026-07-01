@@ -4,12 +4,12 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
-import type { ToolType, ToolQuestionMessage, NormalizedToolStep } from "@/types/chat";
+import type { ToolType, SubmitResult } from "@/types/chat";
 import { useChatStore } from "@/store/chatStore";
 import { AssessmentTimerShell } from "@/features/assessment/AssessmentTimerShell";
 import { ChatWindow } from "@/components/chat/ChatWindow";
 import { SessionProctoringShell } from "@/features/proctoring";
-import { toolRegistry } from "@/features/chat/toolRegistry";
+import { ChatContext } from "@/features/chat/chatContext";
 import { submitResponse } from "@/lib/session-api";
 import { readIdentityReference, readSessionAuth } from "@/lib/session-storage";
 
@@ -30,6 +30,7 @@ export default function AssessmentChatPage() {
 
   const pushToolQuestion = useChatStore((s) => s.pushToolQuestion);
   const pushTransition = useChatStore((s) => s.pushTransition);
+  const pushUserAnswer = useChatStore((s) => s.pushUserAnswer);
   const markAnswered = useChatStore((s) => s.markAnswered);
   const setSession = useChatStore((s) => s.setSession);
   const setCurrentTool = useChatStore((s) => s.setCurrentTool);
@@ -97,11 +98,14 @@ export default function AssessmentChatPage() {
   }, [isComplete, sessionId, accessToken, completeHref, router]);
 
   const handleAnswered = useCallback(
-    async (step: NormalizedToolStep) => {
+    async (result: SubmitResult) => {
+      const { answerMessage, step } = result;
+
       if (currentMessageId.current) {
         markAnswered(currentMessageId.current);
       }
 
+      pushUserAnswer(answerMessage.tool, answerMessage.summary);
       pushTransition(step.transitionText);
 
       if (step.isToolComplete) {
@@ -109,19 +113,19 @@ export default function AssessmentChatPage() {
         advancing.current = true;
 
         try {
-          const result = await advanceExaminer();
+          const advanceResult = await advanceExaminer();
 
-          if (result.isComplete) {
+          if (advanceResult.isComplete) {
             currentMessageId.current = null;
             return;
           }
 
-          if (result.nextTool && result.nextToolInfo) {
+          if (advanceResult.nextTool && advanceResult.nextToolInfo) {
             firstQuestionForTool(
-              result.nextTool,
-              result.nextToolInfo.total_for_tool,
-              result.nextToolInfo.difficulty,
-              result.nextToolInfo.time_limit_seconds,
+              advanceResult.nextTool,
+              advanceResult.nextToolInfo.total_for_tool,
+              advanceResult.nextToolInfo.difficulty,
+              advanceResult.nextToolInfo.time_limit_seconds,
             );
           }
         } catch {
@@ -141,31 +145,13 @@ export default function AssessmentChatPage() {
     },
     [
       markAnswered,
+      pushUserAnswer,
       pushTransition,
       pushToolQuestion,
       advanceExaminer,
       firstQuestionForTool,
       currentToolInfo,
     ],
-  );
-
-  interface ToolMsg {
-    kind: "tool_question";
-    tool: ToolType;
-  }
-
-  const renderTool = useCallback(
-    (msg: ToolMsg) => {
-      const Component = toolRegistry[msg.tool];
-      if (!Component) return null;
-      return (
-        <Component
-          message={msg as ToolQuestionMessage}
-          onAnswered={handleAnswered}
-        />
-      );
-    },
-    [handleAnswered],
   );
 
   if (!sessionId || !accessToken) {
@@ -200,10 +186,9 @@ export default function AssessmentChatPage() {
           </p>
         </div>
 
-        <ChatWindow
-          messages={messages}
-          renderTool={renderTool}
-        />
+        <ChatContext.Provider value={{ onAnswered: handleAnswered }}>
+          <ChatWindow messages={messages} />
+        </ChatContext.Provider>
       </SessionProctoringShell>
     </main>
   );

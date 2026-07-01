@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 
-import type { ToolQuestionMessage, NormalizedToolStep } from "@/types/chat";
+import type { SubmitResult, ToolQuestionMessage } from "@/types/chat";
 import { useChatStore } from "@/store/chatStore";
 import VoiceRecorder from "@/features/voice/VoiceRecorder";
 import { useVoiceDriver } from "@/features/voice/useVoiceDriver";
@@ -15,7 +15,7 @@ function getWsBase(): string {
 
 interface ChatVoiceMessageProps {
   message: ToolQuestionMessage;
-  onAnswered: (step: NormalizedToolStep) => void;
+  onAnswered: (result: SubmitResult) => void;
 }
 
 export function ChatVoiceMessage({ message, onAnswered }: ChatVoiceMessageProps) {
@@ -33,8 +33,8 @@ export function ChatVoiceMessage({ message, onAnswered }: ChatVoiceMessageProps)
   const handleRecordingComplete = useCallback(
     async () => {
       try {
-        const step = await driver.submit();
-        onAnswered(step);
+        const result = await driver.submit();
+        onAnswered(result);
       } catch {
         // error surfaced via driver.error
       }

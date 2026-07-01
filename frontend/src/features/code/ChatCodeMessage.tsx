@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import type { ToolQuestionMessage, NormalizedToolStep } from "@/types/chat";
+import type { SubmitResult, ToolQuestionMessage, UserAnswerMessage } from "@/types/chat";
 import { useChatStore } from "@/store/chatStore";
 import { CodeEditor } from "@/features/code/CodeEditor";
 import { CodeQuestionPanel } from "@/features/code/CodeQuestionPanel";
@@ -11,7 +11,7 @@ import { generateCodeChallenge } from "@/lib/api";
 
 interface ChatCodeMessageProps {
   message: ToolQuestionMessage;
-  onAnswered: (step: NormalizedToolStep) => void;
+  onAnswered: (result: SubmitResult) => void;
 }
 
 export function ChatCodeMessage({ message, onAnswered }: ChatCodeMessageProps) {
@@ -36,12 +36,24 @@ export function ChatCodeMessage({ message, onAnswered }: ChatCodeMessageProps) {
       const reachedLimit =
         message.totalForTool > 0 && answered >= message.totalForTool;
 
+      const answerMessage: UserAnswerMessage = {
+        id: `ans-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        kind: "user_answer",
+        role: "user",
+        createdAt: Date.now(),
+        tool: "code",
+        summary: "Submitted code solution",
+      };
+
       if (newContract.stop || reachedLimit) {
         onAnswered({
-          tool: "code",
-          isToolComplete: true,
-          nextPayload: null,
-          transitionText: "Got it — next question…",
+          answerMessage,
+          step: {
+            tool: "code",
+            isToolComplete: true,
+            nextPayload: null,
+            transitionText: "Got it — next question…",
+          },
         });
         return;
       }

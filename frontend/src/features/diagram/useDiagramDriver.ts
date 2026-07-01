@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { NormalizedToolStep, ToolType } from "@/types/chat";
+import type { SubmitResult, ToolType, UserAnswerMessage } from "@/types/chat";
 import { pollDiagramPendingQuestion } from "@/hooks/useQuestionTimer";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
@@ -21,7 +21,7 @@ export interface DiagramDriverState {
   questionIndex: number;
   totalBudget: number;
   error: string | null;
-  submit: (questionId: number, answerText: string, currentQuestionIndex: number) => Promise<NormalizedToolStep>;
+  submit: (questionId: number, answerText: string, currentQuestionIndex: number) => Promise<SubmitResult>;
 }
 
 export function useDiagramDriver(
@@ -72,9 +72,18 @@ export function useDiagramDriver(
   }, [sessionId]);
 
   const submit = useCallback(
-    async (questionId: number, answerText: string, currentQuestionIndex: number): Promise<NormalizedToolStep> => {
+    async (questionId: number, answerText: string, currentQuestionIndex: number): Promise<SubmitResult> => {
       setSubmitting(true);
       setError(null);
+
+      const answerMessage: UserAnswerMessage = {
+        id: `ans-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        kind: "user_answer",
+        role: "user",
+        createdAt: Date.now(),
+        tool: "diagram",
+        summary: `Submitted: ${answerText}`,
+      };
 
       try {
         const res = await fetch(`${API_BASE}/diagram/sessions/${sessionId}/answer`, {
@@ -98,10 +107,13 @@ export function useDiagramDriver(
 
         if (data.is_complete) {
           return {
-            tool: "diagram" as ToolType,
-            isToolComplete: true,
-            nextPayload: null,
-            transitionText: "Got it — next question…",
+            answerMessage,
+            step: {
+              tool: "diagram" as ToolType,
+              isToolComplete: true,
+              nextPayload: null,
+              transitionText: "Got it — next question…",
+            },
           };
         }
 
@@ -110,10 +122,13 @@ export function useDiagramDriver(
           setQuestion(pending.question);
           setQuestionIndex((prev) => prev + 1);
           return {
-            tool: "diagram" as ToolType,
-            isToolComplete: false,
-            nextPayload: pending.question,
-            transitionText: "Got it — next question…",
+            answerMessage,
+            step: {
+              tool: "diagram" as ToolType,
+              isToolComplete: false,
+              nextPayload: pending.question,
+              transitionText: "Got it — next question…",
+            },
           };
         }
 
@@ -121,10 +136,13 @@ export function useDiagramDriver(
         setQuestion(nextQ);
         setQuestionIndex((prev) => prev + 1);
         return {
-          tool: "diagram" as ToolType,
-          isToolComplete: false,
-          nextPayload: nextQ,
-          transitionText: "Got it — next question…",
+          answerMessage,
+          step: {
+            tool: "diagram" as ToolType,
+            isToolComplete: false,
+            nextPayload: nextQ,
+            transitionText: "Got it — next question…",
+          },
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Submit failed";

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { NormalizedToolStep, ToolType } from "@/types/chat";
+import type { SubmitResult, ToolType, UserAnswerMessage } from "@/types/chat";
 import { pollMcqPendingQuestion } from "@/hooks/useQuestionTimer";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
@@ -19,7 +19,7 @@ export interface McqDriverState {
   questionIndex: number;
   totalBudget: number;
   error: string | null;
-  submit: (questionId: number, selectedLabel: string) => Promise<NormalizedToolStep>;
+  submit: (questionId: number, selectedLabel: string) => Promise<SubmitResult>;
 }
 
 export function useMcqDriver(
@@ -70,9 +70,18 @@ export function useMcqDriver(
   }, [sessionId]);
 
   const submit = useCallback(
-    async (questionId: number, selectedLabel: string): Promise<NormalizedToolStep> => {
+    async (questionId: number, selectedLabel: string): Promise<SubmitResult> => {
       setSubmitting(true);
       setError(null);
+
+      const answerMessage: UserAnswerMessage = {
+        id: `ans-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        kind: "user_answer",
+        role: "user",
+        createdAt: Date.now(),
+        tool: "mcq",
+        summary: `Selected: ${selectedLabel}`,
+      };
 
       try {
         const res = await fetch(`${API_BASE}/mcq/sessions/${sessionId}/answer`, {
@@ -98,10 +107,13 @@ export function useMcqDriver(
 
         if (data.is_complete) {
           return {
-            tool: "mcq" as ToolType,
-            isToolComplete: true,
-            nextPayload: null,
-            transitionText: "Got it — next question…",
+            answerMessage,
+            step: {
+              tool: "mcq" as ToolType,
+              isToolComplete: true,
+              nextPayload: null,
+              transitionText: "Got it — next question…",
+            },
           };
         }
 
@@ -113,19 +125,25 @@ export function useMcqDriver(
           setBudget(pending.total_questions);
           setQuestionIndex((prev) => prev + 1);
           return {
-            tool: "mcq" as ToolType,
-            isToolComplete: false,
-            nextPayload: nextQ,
-            transitionText: "Got it — next question…",
+            answerMessage,
+            step: {
+              tool: "mcq" as ToolType,
+              isToolComplete: false,
+              nextPayload: nextQ,
+              transitionText: "Got it — next question…",
+            },
           };
         }
 
         if (questionIndex + 1 >= budget) {
           return {
-            tool: "mcq" as ToolType,
-            isToolComplete: true,
-            nextPayload: null,
-            transitionText: "Got it — next question…",
+            answerMessage,
+            step: {
+              tool: "mcq" as ToolType,
+              isToolComplete: true,
+              nextPayload: null,
+              transitionText: "Got it — next question…",
+            },
           };
         }
 
@@ -133,10 +151,13 @@ export function useMcqDriver(
         setQuestion(nextQ);
         setQuestionIndex((prev) => prev + 1);
         return {
-          tool: "mcq" as ToolType,
-          isToolComplete: false,
-          nextPayload: nextQ,
-          transitionText: "Got it — next question…",
+          answerMessage,
+          step: {
+            tool: "mcq" as ToolType,
+            isToolComplete: false,
+            nextPayload: nextQ,
+            transitionText: "Got it — next question…",
+          },
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Submit failed";

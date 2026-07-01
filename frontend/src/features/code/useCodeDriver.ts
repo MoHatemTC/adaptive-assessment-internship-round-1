@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { NormalizedToolStep, ToolType } from "@/types/chat";
+import type { SubmitResult, ToolType, UserAnswerMessage } from "@/types/chat";
 import {
   type AdaptiveContract,
   type ChallengeRead,
@@ -23,7 +23,7 @@ export interface CodeDriverState {
   languages: { id: SupportedLanguage; label: string; monaco_language: string }[];
   questionsAnswered: number;
   error: string | null;
-  submit: (code: string) => Promise<NormalizedToolStep>;
+  submit: (code: string) => Promise<SubmitResult>;
   setLanguage: (lang: SupportedLanguage) => void;
   reset: () => void;
 }
@@ -110,13 +110,22 @@ export function useCodeDriver({
   }, []);
 
   const submit = useCallback(
-    async (code: string): Promise<NormalizedToolStep> => {
+    async (code: string): Promise<SubmitResult> => {
       if (!challenge || !contract) {
         throw new Error("No active challenge to submit");
       }
 
       setSubmitting(true);
       setError(null);
+
+      const answerMessage: UserAnswerMessage = {
+        id: `ans-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        kind: "user_answer",
+        role: "user",
+        createdAt: Date.now(),
+        tool: "code",
+        summary: "Submitted code solution",
+      };
 
       try {
         const result = await createAdaptiveCodeSubmission({
@@ -139,10 +148,13 @@ export function useCodeDriver({
         if (newContract.stop || reachedLimit) {
           setChallenge(null);
           return {
-            tool: "code" as ToolType,
-            isToolComplete: true,
-            nextPayload: null,
-            transitionText: "Got it — next question…",
+            answerMessage,
+            step: {
+              tool: "code" as ToolType,
+              isToolComplete: true,
+              nextPayload: null,
+              transitionText: "Got it — next question…",
+            },
           };
         }
 
@@ -163,15 +175,18 @@ export function useCodeDriver({
         setGeneratingNext(false);
 
         return {
-          tool: "code" as ToolType,
-          isToolComplete: false,
-          nextPayload: {
-            challenge: nextChallenge.challenge,
-            contract: nextChallenge.contract,
-            questionIndex: nextChallenge.contract.question_index,
-            difficulty: nextChallenge.contract.difficulty,
+          answerMessage,
+          step: {
+            tool: "code" as ToolType,
+            isToolComplete: false,
+            nextPayload: {
+              challenge: nextChallenge.challenge,
+              contract: nextChallenge.contract,
+              questionIndex: nextChallenge.contract.question_index,
+              difficulty: nextChallenge.contract.difficulty,
+            },
+            transitionText: "Got it — next question…",
           },
-          transitionText: "Got it — next question…",
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Submit failed";

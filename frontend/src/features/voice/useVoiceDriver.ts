@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { NormalizedToolStep, ToolType } from "@/types/chat";
+import type { SubmitResult, ToolType, UserAnswerMessage } from "@/types/chat";
 import {
   type Difficulty,
   type FollowUpDepth,
@@ -28,7 +28,7 @@ export interface VoiceDriverState {
   voiceSessionId: number | null;
   maxQuestions: number;
   error: string | null;
-  submit: () => Promise<NormalizedToolStep>;
+  submit: () => Promise<SubmitResult>;
   handleRetry: () => void;
 }
 
@@ -102,12 +102,21 @@ export function useVoiceDriver({
   }, []);
 
   const submit = useCallback(
-    async (): Promise<NormalizedToolStep> => {
+    async (): Promise<SubmitResult> => {
       if (voiceSessionId === null) {
         throw new Error("No active voice session");
       }
 
       setPhase("processing");
+
+      const answerMessage: UserAnswerMessage = {
+        id: `ans-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        kind: "user_answer",
+        role: "user",
+        createdAt: Date.now(),
+        tool: "voice",
+        summary: "Voice response submitted",
+      };
 
       try {
         const result = await processVoiceSession(voiceSessionId, {
@@ -126,10 +135,13 @@ export function useVoiceDriver({
         if (!contract || contract.stop || questionIndex >= maxQuestions - 1) {
           setPhase("complete");
           return {
-            tool: "voice" as ToolType,
-            isToolComplete: true,
-            nextPayload: null,
-            transitionText: "Got it — next question…",
+            answerMessage,
+            step: {
+              tool: "voice" as ToolType,
+              isToolComplete: true,
+              nextPayload: null,
+              transitionText: "Got it — next question…",
+            },
           };
         }
 
@@ -160,15 +172,18 @@ export function useVoiceDriver({
         setPhase("recording");
 
         return {
-          tool: "voice" as ToolType,
-          isToolComplete: false,
-          nextPayload: {
-            questionText: nextQuestion,
-            difficulty: nextDifficulty,
-            questionIndex: nextIndex,
-            followUpDepth: nextDepth,
+          answerMessage,
+          step: {
+            tool: "voice" as ToolType,
+            isToolComplete: false,
+            nextPayload: {
+              questionText: nextQuestion,
+              difficulty: nextDifficulty,
+              questionIndex: nextIndex,
+              followUpDepth: nextDepth,
+            },
+            transitionText: "Got it — next question…",
           },
-          transitionText: "Got it — next question…",
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Processing failed.";
