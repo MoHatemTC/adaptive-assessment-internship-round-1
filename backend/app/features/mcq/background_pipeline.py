@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
+from app.config import get_settings
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.features.mcq.analysis import analyze_mcq_session
@@ -21,27 +21,13 @@ from app.sessions.models import AssessmentSession
 
 _logger = get_logger(__name__)
 
-_DEFAULT_GENERATION_TIMEOUT_SECONDS = 120
-
 
 def async_pipeline_enabled() -> bool:
-    return os.environ.get("MCQ_ASYNC_PIPELINE", "true").lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    return get_settings().MCQ_ASYNC_PIPELINE
 
 
 def _generation_timeout_seconds() -> float:
-    raw = os.environ.get(
-        "MCQ_GENERATION_TIMEOUT_SECONDS",
-        str(_DEFAULT_GENERATION_TIMEOUT_SECONDS),
-    )
-    try:
-        return max(30.0, float(raw))
-    except ValueError:
-        return float(_DEFAULT_GENERATION_TIMEOUT_SECONDS)
+    return max(30.0, float(get_settings().MCQ_GENERATION_TIMEOUT_SECONDS))
 
 
 async def _mark_mcq_failed(

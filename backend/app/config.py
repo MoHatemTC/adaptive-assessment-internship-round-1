@@ -32,8 +32,8 @@ class Settings(BaseSettings):
 
     Settings are loaded from the process environment and, as a fallback, from a
     ``.env`` file in the working directory. Field names are matched
-    case-insensitively.     Unknown environment variables (for example ``E2B_API_KEY``, which is owned by
-    feature modules rather than the kernel) are ignored rather than rejected.
+    case-insensitively. Unknown environment variables are ignored rather than
+    rejected.
 
     Attributes:
         DATABASE_URL: Async SQLAlchemy connection URL. Must use the
@@ -112,6 +112,14 @@ class Settings(BaseSettings):
 
     # ── Workers ───────────────────────────────────────────────────────────────
     CELERY_PIPELINES: bool = False
+    MCQ_ASYNC_PIPELINE: bool = True
+    DIAGRAM_ASYNC_PIPELINE: bool = True
+    CODE_ASYNC_GRADING: bool = True
+    MCQ_GENERATION_TIMEOUT_SECONDS: int = 120
+    DIAGRAM_GENERATION_TIMEOUT_SECONDS: int = 120
+
+    # ── Code sandbox ──────────────────────────────────────────────────────────
+    E2B_API_KEY: SecretStr = SecretStr("")
 
     @field_validator("DATABASE_URL")
     @classmethod
