@@ -201,7 +201,13 @@ def test_submit_answer_round_trip():
     app.include_router(mcq_router)
     app.dependency_overrides[get_db] = _override_get_db
 
-    with TestClient(app) as client:
+    with (
+        patch(
+            "app.proctoring.enforcement.ensure_tool_session_allowed",
+            new=AsyncMock(return_value=None),
+        ),
+        TestClient(app) as client,
+    ):
         create_response = client.post(
             "/mcq/questions",
             json={

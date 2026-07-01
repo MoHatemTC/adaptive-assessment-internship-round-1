@@ -75,6 +75,7 @@ async def run_voice_adaptive_loop(
             current_question_index=input_data.question_index,
             memory_summary=memory_summary,
             prior_questions=prior_questions,
+            session_id=input_data.session_id,
         )
     )
 

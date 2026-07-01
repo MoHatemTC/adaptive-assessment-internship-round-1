@@ -323,6 +323,10 @@ async def get_submission(db: AsyncSession, submission_id: int) -> SubmissionRead
 
 
 async def submit_code(db: AsyncSession, payload: SubmissionCreate) -> SubmissionRead:
+    if payload.session_id:
+        from app.proctoring.enforcement import ensure_tool_session_allowed
+
+        await ensure_tool_session_allowed(db, payload.session_id)
     result = await db.exec(
         select(CodeChallenge)
         .where(CodeChallenge.id == payload.challenge_id)

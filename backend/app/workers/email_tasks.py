@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from typing import Any
 
 import resend
 from weasyprint import HTML
 
+from app.config import get_settings
 from app.core.logging import get_logger
 from app.workers.celery_app import celery_app
 
@@ -16,7 +16,8 @@ _logger = get_logger(__name__)
 
 
 def _resend_configured() -> bool:
-    return bool(os.environ.get("RESEND_API_KEY", "").strip())
+    settings = get_settings()
+    return bool(settings.RESEND_API_KEY.get_secret_value().strip())
 
 
 def _score_bar(score: int | None) -> str:
@@ -174,8 +175,9 @@ def send_session_report_email(
             "reason": f"pdf_generation_error: {exc}",
         }
 
-    resend.api_key = os.environ["RESEND_API_KEY"]
-    from_addr = os.environ.get("RESEND_FROM", "Masaar <reports@sprints.ai>")
+    settings = get_settings()
+    resend.api_key = settings.RESEND_API_KEY.get_secret_value()
+    from_addr = settings.RESEND_FROM
 
     try:
         response = resend.Emails.send(
@@ -215,7 +217,8 @@ def schedule_post_completion_pipeline(
     learner_email: str | None = None,
 ) -> None:
     """Chain report build then email (called from complete_session)."""
-    admin_email = os.environ.get("ADMIN_REPORT_EMAIL", "").strip() or None
+    settings = get_settings()
+    admin_email = settings.ADMIN_REPORT_EMAIL.strip() or None
     build = celery_app.signature("reports.build_session_radar", args=[session_id])
     email = celery_app.signature(
         "reports.email_session_report",
@@ -233,7 +236,8 @@ def schedule_finalize_after_judge_approval(
     learner_email: str | None = None,
 ) -> None:
     """Chain report build + email after admin approves a held judge review."""
-    admin_email = os.environ.get("ADMIN_REPORT_EMAIL", "").strip() or None
+    settings = get_settings()
+    admin_email = settings.ADMIN_REPORT_EMAIL.strip() or None
     finalize = celery_app.signature(
         "reports.finalize_approved_session",
         args=[session_id],

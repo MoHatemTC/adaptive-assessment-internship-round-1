@@ -32,9 +32,8 @@ class Settings(BaseSettings):
 
     Settings are loaded from the process environment and, as a fallback, from a
     ``.env`` file in the working directory. Field names are matched
-    case-insensitively. Unknown environment variables (for example ``SMTP_*``
-    and ``E2B_API_KEY``, which are owned by feature modules rather than the
-    kernel) are ignored rather than rejected.
+    case-insensitively.     Unknown environment variables (for example ``E2B_API_KEY``, which is owned by
+    feature modules rather than the kernel) are ignored rather than rejected.
 
     Attributes:
         DATABASE_URL: Async SQLAlchemy connection URL. Must use the
@@ -103,6 +102,14 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: SecretStr = SecretStr("admin")
     ENVIRONMENT: str = "development"
 
+    # ── Email (Resend) ────────────────────────────────────────────────────────
+    RESEND_API_KEY: SecretStr = SecretStr("")
+    RESEND_FROM: str = "Masaar <reports@sprints.ai>"
+    ADMIN_REPORT_EMAIL: str = ""
+
+    # ── HTTP ──────────────────────────────────────────────────────────────────
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
+
     @field_validator("DATABASE_URL")
     @classmethod
     def _validate_database_url(cls, value: str) -> str:
@@ -162,6 +169,11 @@ class Settings(BaseSettings):
             ``True`` if ``ENVIRONMENT`` is ``production``, otherwise ``False``.
         """
         return self.ENVIRONMENT == "production"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parsed CORS allow-list from comma-separated ``CORS_ORIGINS``."""
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
 
 @lru_cache

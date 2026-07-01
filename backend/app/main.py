@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.config import get_settings
 from app.core.checkpointer import setup_checkpointer
 from app.core.database import check_db_connection
 from app.core.limiter import limiter
@@ -152,11 +153,12 @@ def create_app() -> FastAPI:
     """
     configure_logging()
 
+    settings = get_settings()
     app = FastAPI(title="Masaar API", version="0.1.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://localhost:3001"],
+        allow_origins=settings.cors_origins_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

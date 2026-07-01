@@ -12,6 +12,7 @@ returned as flagged outputs with ``flag_reason="failed"``.
 """
 
 import json
+import time
 from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -19,9 +20,12 @@ from sqlalchemy import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agent.memory_agent import run_memory_agent
+from app.config import get_settings
 from app.core.database import async_session
-from app.core.llm import get_llm
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
 from app.core.logging import get_logger
+from app.core.metrics import record_llm_call
+from app.core.tracing import LangfuseTraceContext
 from app.features.voice.models import (
     VoiceMemoryCard,
     VoiceSession,
@@ -156,6 +160,8 @@ async def _grade_transcript_with_llm(
     transcript: str,
     difficulty: str,
     llm: Any,
+    *,
+    invoke_config: dict | None = None,
 ) -> RubricScores:
     """Grade a voice transcript against a rubric using the kernel LLM gateway.
 
@@ -204,7 +210,8 @@ question explicitly targets it."""
             [
                 SystemMessage(content=system),
                 HumanMessage(content=human),
-            ]
+            ],
+            config=invoke_config or {},
         )
 
         raw_content = response.content
@@ -330,13 +337,34 @@ async def evaluate_voice_response(
 
         # 4. Grade clean transcripts; skip the LLM entirely when flagged.
         if not flagged:
-            llm = get_llm()
-            rubric = await _grade_transcript_with_llm(
-                input_data.question_text,
-                transcript,
-                input_data.target_difficulty,
-                llm,
-            )
+            settings = get_settings()
+            model = settings.LITELLM_MODEL
+            llm, callbacks = get_llm_with_tracing(model)
+            start = time.perf_counter()
+            try:
+                rubric = await _grade_transcript_with_llm(
+                    input_data.question_text,
+                    transcript,
+                    input_data.target_difficulty,
+                    llm,
+                    invoke_config=llm_invoke_config(
+                        callbacks,
+                        trace=LangfuseTraceContext(
+                            session_id=input_data.session_id,
+                            operation="voice_grade",
+                            tool="voice",
+                            question_index=input_data.question_index,
+                        ),
+                    ),
+                )
+                record_llm_call(
+                    model, "voice_grade", "success", time.perf_counter() - start
+                )
+            except Exception:
+                record_llm_call(
+                    model, "voice_grade", "error", time.perf_counter() - start
+                )
+                raise
         else:
             logger.info(
                 "transcript_flagged",
