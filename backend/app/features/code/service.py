@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
-from celery.exceptions import TimeoutError as CeleryTimeoutError
 from fastapi import HTTPException, status
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -299,6 +299,11 @@ async def get_challenge(
     return _challenge_to_read(challenge, learner_view=learner_view)
 
 
+_TERMINAL_SUBMISSION_STATUSES = frozenset(
+    {SubmissionStatus.COMPLETED, SubmissionStatus.FAILED}
+)
+
+
 async def get_submission(db: AsyncSession, submission_id: int) -> SubmissionRead:
     result = await db.exec(
         select(CodeSubmission).where(CodeSubmission.id == submission_id)
@@ -309,8 +314,36 @@ async def get_submission(db: AsyncSession, submission_id: int) -> SubmissionRead
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Submission not found",
         )
-
     return _submission_read_from_metadata(submission)
+
+
+async def _poll_submission_until_terminal(
+    db: AsyncSession,
+    submission_id: int,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float = 0.25,
+) -> CodeSubmission:
+    """Wait for a Celery-dispatched sandbox run to reach a terminal status."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        result = await db.exec(
+            select(CodeSubmission).where(CodeSubmission.id == submission_id)
+        )
+        submission = result.first()
+        if submission is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Submission not found",
+            )
+        if submission.status in _TERMINAL_SUBMISSION_STATUSES:
+            return submission
+        await asyncio.sleep(poll_interval_seconds)
+
+    raise HTTPException(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        detail="Sandbox execution timed out",
+    )
 
 
 def _submission_read_from_metadata(submission: CodeSubmission) -> SubmissionRead:
@@ -369,26 +402,9 @@ async def submit_code(db: AsyncSession, payload: SubmissionCreate) -> Submission
         await db.commit()
         from app.workers.pipeline_tasks import code_execute_submission_task
 
-        task = code_execute_submission_task.delay(submission_id=submission_id)
-        timeout = max(1, challenge.time_limit_seconds) + 20
-        try:
-            await asyncio.to_thread(task.get, timeout=timeout)
-        except CeleryTimeoutError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Sandbox execution timed out",
-            ) from exc
-
-        refreshed = await db.exec(
-            select(CodeSubmission).where(CodeSubmission.id == submission_id)
-        )
-        completed = refreshed.first()
-        if completed is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Submission missing after sandbox execution",
-            )
-        return _submission_read_from_metadata(completed)
+        code_execute_submission_task.delay(submission_id=submission_id)
+        await db.refresh(submission)
+        return _submission_read_from_metadata(submission)
 
     await sandbox_execution.run_sandbox_for_submission(
         db,
@@ -454,6 +470,15 @@ async def adaptive_submit(
             submitted_code=payload.submitted_code,
         ),
     )
+
+    if submission.status == SubmissionStatus.RUNNING:
+        challenge = await get_challenge(db, payload.challenge_id, learner_view=True)
+        completed = await _poll_submission_until_terminal(
+            db,
+            submission.id,
+            timeout_seconds=max(1, challenge.time_limit_seconds) + 20,
+        )
+        submission = _submission_read_from_metadata(completed)
 
     if background_grading.async_grading_enabled():
         try:

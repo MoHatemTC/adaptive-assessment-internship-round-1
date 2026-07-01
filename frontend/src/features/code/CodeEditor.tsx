@@ -10,7 +10,7 @@ import {
 } from "@/features/code/CodeConsolePanel";
 import {
   createAdaptiveCodeSubmission,
-  createCodeSubmission,
+  createCodeSubmissionAndWait,
   type AdaptiveContract,
   type ChallengeRead,
   type DifficultyLevel,
@@ -96,7 +96,7 @@ export function CodeEditor({
       { id: "running", tone: "info", text: "Running sandbox tests…" },
     ]);
     try {
-      const submission = await createCodeSubmission({
+      const submission = await createCodeSubmissionAndWait({
         challenge_id: challenge.id,
         session_id: sessionId,
         submitted_code: code,

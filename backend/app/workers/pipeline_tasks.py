@@ -10,7 +10,10 @@ from app.core.logging import get_logger
 from app.core.metrics import celery_tasks_total
 from app.features.code.background_grading import run_llm_grade_upgrade
 from app.features.code.models import CodeChallenge, CodeSubmission
-from app.features.code.sandbox_execution import run_sandbox_for_submission
+from app.features.code.sandbox_execution import (
+    mark_submission_failed,
+    run_sandbox_for_submission,
+)
 from app.features.diagram.background_pipeline import (
     _run_post_answer_pipeline as diagram_post_answer,
     _run_start_pipeline as diagram_start,
@@ -24,12 +27,23 @@ from app.workers.celery_app import celery_app
 
 _logger = get_logger(__name__)
 
+_PIPELINE_TASK_OPTS: dict[str, object] = {
+    "bind": True,
+    "autoretry_for": (Exception,),
+    "retry_backoff": True,
+    "retry_backoff_max": 60,
+    "retry_jitter": True,
+    "max_retries": 3,
+    "time_limit": 300,
+    "soft_time_limit": 270,
+}
+
 
 def _record_task(task_name: str, status: str) -> None:
     celery_tasks_total.labels(task_name=task_name, status=status).inc()
 
 
-@celery_app.task(name="pipelines.mcq.post_answer")
+@celery_app.task(name="pipelines.mcq.post_answer", **_PIPELINE_TASK_OPTS)
 def mcq_post_answer_task(
     *,
     session_id: str,
@@ -56,7 +70,7 @@ def mcq_post_answer_task(
         raise
 
 
-@celery_app.task(name="pipelines.mcq.start")
+@celery_app.task(name="pipelines.mcq.start", **_PIPELINE_TASK_OPTS)
 def mcq_start_task(*, session_id: str) -> dict[str, str]:
     """Generate the first MCQ for a session on a worker."""
     task_name = "pipelines.mcq.start"
@@ -70,7 +84,7 @@ def mcq_start_task(*, session_id: str) -> dict[str, str]:
         raise
 
 
-@celery_app.task(name="pipelines.diagram.post_answer")
+@celery_app.task(name="pipelines.diagram.post_answer", **_PIPELINE_TASK_OPTS)
 def diagram_post_answer_task(
     *,
     session_id: str,
@@ -99,7 +113,7 @@ def diagram_post_answer_task(
         raise
 
 
-@celery_app.task(name="pipelines.diagram.start")
+@celery_app.task(name="pipelines.diagram.start", **_PIPELINE_TASK_OPTS)
 def diagram_start_task(*, session_id: str) -> dict[str, str]:
     """Generate the first diagram question for a session on a worker."""
     task_name = "pipelines.diagram.start"
@@ -113,7 +127,7 @@ def diagram_start_task(*, session_id: str) -> dict[str, str]:
         raise
 
 
-@celery_app.task(name="pipelines.code.llm_grade_upgrade")
+@celery_app.task(name="pipelines.code.llm_grade_upgrade", **_PIPELINE_TASK_OPTS)
 def code_llm_grade_upgrade_task(
     *,
     grade_id: int,
@@ -144,7 +158,7 @@ def code_llm_grade_upgrade_task(
         raise
 
 
-@celery_app.task(name="pipelines.code.execute_submission")
+@celery_app.task(name="pipelines.code.execute_submission", **_PIPELINE_TASK_OPTS)
 def code_execute_submission_task(*, submission_id: int) -> dict[str, str]:
     """Run E2B sandbox execution for a persisted submission on a worker."""
 
@@ -170,12 +184,20 @@ def code_execute_submission_task(*, submission_id: int) -> dict[str, str]:
                     f"challenge {challenge.id} has no test cases for submission {submission_id}"
                 )
 
-            await run_sandbox_for_submission(
-                db,
-                submission=submission,
-                challenge=challenge,
-                submitted_code=submission.submitted_code,
-            )
+            try:
+                await run_sandbox_for_submission(
+                    db,
+                    submission=submission,
+                    challenge=challenge,
+                    submitted_code=submission.submitted_code,
+                )
+            except Exception as exc:
+                await mark_submission_failed(
+                    db,
+                    submission=submission,
+                    error=str(exc),
+                )
+                raise
             return {"submission_id": str(submission_id), "status": "completed"}
 
     task_name = "pipelines.code.execute_submission"

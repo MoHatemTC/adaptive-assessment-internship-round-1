@@ -36,6 +36,13 @@ def _mock_sandbox_results(raw_results: list[dict], *, error: str | None = None):
     return execution
 
 
+def _e2b_enabled_settings() -> MagicMock:
+    settings = MagicMock()
+    settings.E2B_API_KEY.get_secret_value.return_value = "test-key"
+    settings.is_development = False
+    return settings
+
+
 class TestToolExecution:
     def test_compute_weighted_score_full_pass(self):
         cases = [
@@ -148,8 +155,10 @@ class TestToolExecution:
         mock_sandbox.commands.run = MagicMock(return_value=mock_cmd)
         mock_sandbox.kill = MagicMock()
 
-        with patch.dict(os.environ, {"E2B_API_KEY": "test-key"}):
-            with patch("e2b_code_interpreter.Sandbox.create", return_value=mock_sandbox):
+        with (
+            patch("app.features.code.tool.get_settings", return_value=_e2b_enabled_settings()),
+            patch("e2b_code_interpreter.Sandbox.create", return_value=mock_sandbox),
+        ):
                 outcome, results, error = await tool.execute_submission(
                     fixture["correct_solution"],
                     [
@@ -174,8 +183,10 @@ class TestToolExecution:
         mock_sandbox.kill = MagicMock()
 
         cases = [CodeTestCaseDTO(id="1", input="x", expected_output="y")]
-        with patch.dict(os.environ, {"E2B_API_KEY": "test-key"}):
-            with patch("e2b_code_interpreter.Sandbox.create", return_value=mock_sandbox):
+        with (
+            patch("app.features.code.tool.get_settings", return_value=_e2b_enabled_settings()),
+            patch("e2b_code_interpreter.Sandbox.create", return_value=mock_sandbox),
+        ):
                 outcome, results, error = await tool.execute_submission(
                     "def solution(s:\n    return s",
                     cases,
@@ -196,8 +207,10 @@ class TestToolExecution:
         mock_sandbox.kill = MagicMock()
 
         cases = [CodeTestCaseDTO(id="1", input="x", expected_output="y")]
-        with patch.dict(os.environ, {"E2B_API_KEY": "test-key"}):
-            with patch("e2b_code_interpreter.Sandbox.create", return_value=mock_sandbox):
+        with (
+            patch("app.features.code.tool.get_settings", return_value=_e2b_enabled_settings()),
+            patch("e2b_code_interpreter.Sandbox.create", return_value=mock_sandbox),
+        ):
                 outcome, results, error = await tool.execute_submission(
                     "while True: pass",
                     cases,
@@ -219,11 +232,13 @@ class TestToolExecution:
                 expected_output="ok",
             )
         ]
-        with patch.dict(os.environ, {"E2B_API_KEY": "test-key"}):
-            with patch(
+        with (
+            patch("app.features.code.tool.get_settings", return_value=_e2b_enabled_settings()),
+            patch(
                 "e2b_code_interpreter.Sandbox.create",
                 side_effect=TimeoutError("sandbox cold start timeout"),
-            ):
+            ),
+        ):
                 outcome, results, error = await tool.execute_submission(
                     "def solution(): return 'ok'",
                     cases,
@@ -285,12 +300,14 @@ class TestToolExecution:
             CodeTestCaseDTO(id=str(i), **tc)
             for i, tc in enumerate(fixture["test_cases"], start=1)
         ]
-        with patch.dict(os.environ, {"E2B_API_KEY": "test-key"}):
-            with patch("e2b_code_interpreter.Sandbox.create", return_value=mock_sandbox):
-                outcome, results, _ = await tool.execute_submission(
-                    fixture["wrong_solution"],
-                    cases,
-                )
+        with (
+            patch("app.features.code.tool.get_settings", return_value=_e2b_enabled_settings()),
+            patch("e2b_code_interpreter.Sandbox.create", return_value=mock_sandbox),
+        ):
+            outcome, results, _ = await tool.execute_submission(
+                fixture["wrong_solution"],
+                cases,
+            )
 
         assert outcome == ExecutionOutcome.SUCCESS
         score = tool.compute_weighted_score(cases, results)

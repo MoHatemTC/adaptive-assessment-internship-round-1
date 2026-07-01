@@ -65,4 +65,21 @@ async def run_sandbox_for_submission(
     return submission
 
 
-__all__ = ["run_sandbox_for_submission"]
+async def mark_submission_failed(
+    db: AsyncSession,
+    *,
+    submission: CodeSubmission,
+    error: str,
+    commit: bool = True,
+) -> CodeSubmission:
+    """Persist a terminal failure for a sandbox run."""
+    submission.status = SubmissionStatus.FAILED
+    submission.grading_metadata = json.dumps({"error": error})
+    db.add(submission)
+    if commit:
+        await db.commit()
+        await db.refresh(submission)
+    return submission
+
+
+__all__ = ["mark_submission_failed", "run_sandbox_for_submission"]
