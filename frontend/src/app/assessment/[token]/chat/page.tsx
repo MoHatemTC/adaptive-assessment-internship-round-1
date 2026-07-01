@@ -1,31 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
+import type { ToolType, ToolQuestionMessage, NormalizedToolStep } from "@/types/chat";
+import { useChatStore } from "@/store/chatStore";
 import { AssessmentTimerShell } from "@/features/assessment/AssessmentTimerShell";
-import { CodeChallengeView } from "@/features/code/CodeChallengeView";
-import DiagramTool, {
-  type DiagramNextQuestion,
-} from "@/features/diagram/DiagramTool";
+import { ChatWindow } from "@/components/chat/ChatWindow";
 import { SessionProctoringShell } from "@/features/proctoring";
-import AdaptiveVoiceSession from "@/features/voice/AdaptiveVoiceSession";
-import McqCard, { McqOption } from "@/features/mcq/McqCard";
-import {
-  formatQuestionTimer,
-  pollDiagramPendingQuestion,
-  pollMcqPendingQuestion,
-  useQuestionTimer,
-} from "@/hooks/useQuestionTimer";
-import {
-  NextToolInfo,
-  completeSession,
-  submitResponse,
-} from "@/lib/session-api";
+import { toolRegistry } from "@/features/chat/toolRegistry";
+import { submitResponse } from "@/lib/session-api";
 import { readIdentityReference, readSessionAuth } from "@/lib/session-storage";
-
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
 export default function AssessmentChatPage() {
   const router = useRouter();
@@ -35,14 +21,24 @@ export default function AssessmentChatPage() {
   const token = params.token;
   const referenceImageB64 = useMemo(() => readIdentityReference(), []);
 
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [currentTool, setCurrentTool] = useState<string | null>(null);
-  const [toolInfo, setToolInfo] = useState<NextToolInfo | null>(null);
-  const [isComplete, setIsComplete] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [toolLoading, setToolLoading] = useState(false);
+  const messages = useChatStore((s) => s.messages);
+  const sessionId = useChatStore((s) => s.sessionId);
+  const accessToken = useChatStore((s) => s.accessToken);
+  const currentTool = useChatStore((s) => s.currentTool);
+  const currentToolInfo = useChatStore((s) => s.currentToolInfo);
+  const isComplete = useChatStore((s) => s.isComplete);
+
+  const pushToolQuestion = useChatStore((s) => s.pushToolQuestion);
+  const pushTransition = useChatStore((s) => s.pushTransition);
+  const markAnswered = useChatStore((s) => s.markAnswered);
+  const setSession = useChatStore((s) => s.setSession);
+  const setCurrentTool = useChatStore((s) => s.setCurrentTool);
+  const setIsComplete = useChatStore((s) => s.setIsComplete);
+  const advanceExaminer = useChatStore((s) => s.advanceExaminer);
+
+  const currentMessageId = useRef<string | null>(null);
   const started = useRef(false);
+  const advancing = useRef(false);
 
   const completeHref = useMemo(() => {
     const sid = sessionId ?? search.get("session_id");
@@ -51,6 +47,21 @@ export default function AssessmentChatPage() {
       : `/assessment/${token}/complete`;
   }, [sessionId, search, token]);
 
+  const firstQuestionForTool = useCallback(
+    (tool: string, totalForTool: number, difficulty?: string, timeLimitSeconds?: number | null) => {
+      const msgId = pushToolQuestion(
+        tool as ToolType,
+        null,
+        0,
+        totalForTool,
+        difficulty,
+        timeLimitSeconds,
+      );
+      currentMessageId.current = msgId;
+    },
+    [pushToolQuestion],
+  );
+
   useEffect(() => {
     if (started.current) return;
     started.current = true;
@@ -58,77 +69,114 @@ export default function AssessmentChatPage() {
     const stored = readSessionAuth();
     const sid = search.get("session_id") ?? stored.sessionId;
     const tok = stored.token;
-    if (!sid || !tok) {
-      setError("Missing session credentials. Please restart the assessment.");
-      return;
-    }
-    setSessionId(sid);
-    setAccessToken(tok);
+    if (!sid || !tok) return;
+
+    setSession(sid, tok);
 
     submitResponse(sid, "", "start", tok)
       .then((res) => {
-        setCurrentTool(res.current_tool);
-        setToolInfo(res.next_tool_info);
+        const tool = res.current_tool as ToolType | null;
+        setCurrentTool(tool, res.next_tool_info);
         setIsComplete(res.is_complete);
-      })
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : "Could not start"),
-      );
-  }, [search]);
 
-  const advance = useCallback(
-    (tool: string) => {
-      if (!sessionId || !accessToken) return;
-      submitResponse(sessionId, tool, "complete_tool", accessToken)
-        .then(async (res) => {
-          setCurrentTool(res.current_tool);
-          setToolInfo(res.next_tool_info);
-          setIsComplete(res.is_complete);
-          if (res.is_complete) {
-            try {
-              await completeSession(sessionId, accessToken);
-            } catch (err) {
-              console.warn("Failed to mark session complete", err);
-            }
-            router.push(completeHref);
-          }
-        })
-        .catch((err) =>
-          setError(err instanceof Error ? err.message : "Could not advance"),
-        );
-    },
-    [sessionId, accessToken, router, completeHref],
-  );
+        if (tool && res.next_tool_info) {
+          firstQuestionForTool(
+            tool,
+            res.next_tool_info.total_for_tool,
+            res.next_tool_info.difficulty,
+            res.next_tool_info.time_limit_seconds,
+          );
+        }
+      })
+      .catch(() => {});
+  }, [search, setSession, setCurrentTool, setIsComplete, firstQuestionForTool]);
 
   useEffect(() => {
     if (!isComplete || !sessionId || !accessToken) return;
-    (async () => {
-      try {
-        await completeSession(sessionId, accessToken);
-      } catch (err) {
-        console.warn("Failed to mark session complete", err);
-      }
-      router.push(completeHref);
-    })();
+    router.push(completeHref);
   }, [isComplete, sessionId, accessToken, completeHref, router]);
 
-  if (error) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-surface px-4">
-        <p className="rounded-lg border border-[#E5484D]/30 bg-[#E5484D]/5 p-4 text-sm text-[#E5484D]">
-          {error}
-        </p>
-      </main>
-    );
+  const handleAnswered = useCallback(
+    async (step: NormalizedToolStep) => {
+      if (currentMessageId.current) {
+        markAnswered(currentMessageId.current);
+      }
+
+      pushTransition(step.transitionText);
+
+      if (step.isToolComplete) {
+        if (advancing.current) return;
+        advancing.current = true;
+
+        try {
+          const result = await advanceExaminer();
+
+          if (result.isComplete) {
+            currentMessageId.current = null;
+            return;
+          }
+
+          if (result.nextTool && result.nextToolInfo) {
+            firstQuestionForTool(
+              result.nextTool,
+              result.nextToolInfo.total_for_tool,
+              result.nextToolInfo.difficulty,
+              result.nextToolInfo.time_limit_seconds,
+            );
+          }
+        } catch {
+          // error handled by store
+        } finally {
+          advancing.current = false;
+        }
+      } else if (step.nextPayload) {
+        const msgId = pushToolQuestion(
+          step.tool,
+          step.nextPayload,
+          0,
+          currentToolInfo?.total_for_tool ?? 1,
+        );
+        currentMessageId.current = msgId;
+      }
+    },
+    [
+      markAnswered,
+      pushTransition,
+      pushToolQuestion,
+      advanceExaminer,
+      firstQuestionForTool,
+      currentToolInfo,
+    ],
+  );
+
+  interface ToolMsg {
+    kind: "tool_question";
+    tool: ToolType;
   }
 
-  if (!currentTool || !sessionId || !accessToken) {
+  const renderTool = useCallback(
+    (msg: ToolMsg) => {
+      const Component = toolRegistry[msg.tool];
+      if (!Component) return null;
+      return (
+        <Component
+          message={msg as ToolQuestionMessage}
+          onAnswered={handleAnswered}
+        />
+      );
+    },
+    [handleAnswered],
+  );
+
+  if (!sessionId || !accessToken) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-surface px-4">
         <p className="text-sm text-[#1F2430]/70">Preparing your assessment…</p>
       </main>
     );
   }
+
+  const isBusy = advancing.current;
 
   return (
     <main className="min-h-screen bg-surface px-4 py-8">
@@ -143,337 +191,20 @@ export default function AssessmentChatPage() {
         <AssessmentTimerShell
           sessionId={sessionId}
           accessToken={accessToken}
-          paused={toolLoading}
+          paused={isBusy}
         />
 
         <div className="mx-auto mb-6 w-full max-w-2xl">
           <p className="text-sm font-medium capitalize text-[#1F2430]">
-            {currentTool} section
+            {currentTool ?? ""} section
           </p>
         </div>
 
-        {currentTool === "code" && (
-          <CodeChallengeView
-            initialSessionId={sessionId}
-            assessmentId={token}
-            maxQuestions={toolInfo?.total_for_tool}
-            questionTimeLimitSeconds={toolInfo?.time_limit_seconds ?? 600}
-            onSessionComplete={() => advance("code")}
-          />
-        )}
-
-        {currentTool === "voice" && (
-          <AdaptiveVoiceSession
-            sessionId={sessionId}
-            initialQuestion="Tell me about a recent technical challenge you faced and how you solved it."
-            initialDifficulty={
-              (toolInfo?.difficulty as "beginner" | "intermediate" | "advanced") ??
-              "beginner"
-            }
-            learnerProfile={{}}
-            adminConfig={{
-              max_difficulty: "advanced",
-              max_questions: toolInfo?.total_for_tool ?? 10,
-            }}
-            onComplete={() => advance("voice")}
-          />
-        )}
-
-        {currentTool === "mcq" && (
-          <ChatMcqRunner
-            sessionId={sessionId}
-            totalQuestions={toolInfo?.total_for_tool ?? 1}
-            timeLimitSeconds={toolInfo?.time_limit_seconds ?? undefined}
-            onLoadingChange={setToolLoading}
-            onComplete={() => advance("mcq")}
-          />
-        )}
-
-        {currentTool === "diagram" && (
-          <ChatDiagramRunner
-            sessionId={sessionId}
-            totalQuestions={toolInfo?.total_for_tool ?? 1}
-            timeLimitSeconds={toolInfo?.time_limit_seconds ?? undefined}
-            onLoadingChange={setToolLoading}
-            onComplete={() => advance("diagram")}
-          />
-        )}
+        <ChatWindow
+          messages={messages}
+          renderTool={renderTool}
+        />
       </SessionProctoringShell>
     </main>
-  );
-}
-
-interface McqQuestion {
-  id: number;
-  question_text: string;
-  options: McqOption[];
-}
-
-function ChatMcqRunner({
-  sessionId,
-  totalQuestions,
-  timeLimitSeconds,
-  onLoadingChange,
-  onComplete,
-}: {
-  sessionId: string;
-  totalQuestions: number;
-  timeLimitSeconds?: number;
-  onLoadingChange: (loading: boolean) => void;
-  onComplete: () => void;
-}) {
-  const [question, setQuestion] = useState<McqQuestion | null>(null);
-  const [budget, setBudget] = useState(totalQuestions);
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [submitting, setSubmitting] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const seeded = useRef(false);
-
-  const timerPaused = loading || submitting;
-  const { secondsRemaining } = useQuestionTimer(timeLimitSeconds, question?.id ?? questionIndex, {
-    enabled: Boolean(timeLimitSeconds),
-    armed: Boolean(question),
-    paused: timerPaused,
-  });
-
-  useEffect(() => {
-    onLoadingChange(loading || submitting);
-  }, [loading, onLoadingChange, submitting]);
-
-  useEffect(() => {
-    if (seeded.current) return;
-    seeded.current = true;
-    (async () => {
-      try {
-        const startRes = await fetch(`${API_BASE}/mcq/sessions/${sessionId}/start`, {
-          method: "POST",
-        });
-        if (!startRes.ok) {
-          const body = (await startRes.json().catch(() => ({}))) as { detail?: string };
-          throw new Error(body.detail ?? "Failed to load MCQ");
-        }
-        const startData = (await startRes.json()) as {
-          status: string;
-          total_questions: number;
-          question: McqQuestion | null;
-        };
-        setBudget(startData.total_questions);
-
-        if (startData.status === "ready" && startData.question) {
-          setQuestion(startData.question);
-          return;
-        }
-
-        const pending = await pollMcqPendingQuestion(API_BASE, sessionId);
-        setQuestion(pending.question);
-        setBudget(pending.total_questions);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load MCQ");
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [sessionId]);
-
-  const handleSubmit = useCallback(
-    async (questionId: number, selectedLabel: string) => {
-      setSubmitting(true);
-      setError(null);
-      try {
-        const res = await fetch(`${API_BASE}/mcq/sessions/${sessionId}/answer`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            question_id: questionId,
-            selected_option: selectedLabel,
-            question_index: questionIndex,
-          }),
-        });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { detail?: string };
-          throw new Error(body.detail ?? "Failed to submit answer");
-        }
-        const data = (await res.json()) as {
-          next_question: McqQuestion | null;
-          is_complete: boolean;
-          status?: string;
-        };
-        if (data.is_complete) {
-          onComplete();
-          return;
-        }
-        if (data.status === "generating" || !data.next_question) {
-          setLoading(true);
-          const pending = await pollMcqPendingQuestion(API_BASE, sessionId);
-          setQuestion(pending.question);
-          setBudget(pending.total_questions);
-          setQuestionIndex((prev) => prev + 1);
-          return;
-        }
-        if (questionIndex + 1 >= budget) {
-          onComplete();
-          return;
-        }
-        setQuestion(data.next_question);
-        setQuestionIndex((prev) => prev + 1);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Submit failed");
-      } finally {
-        setSubmitting(false);
-        setLoading(false);
-      }
-    },
-    [sessionId, questionIndex, budget, onComplete],
-  );
-
-  return (
-    <div className="flex flex-col items-center gap-4">
-      <div className="flex w-full max-w-2xl items-center justify-between text-sm text-[#1F2430]/70">
-        <span>
-          Question {question ? questionIndex + 1 : "…"} of {budget}
-        </span>
-        {secondsRemaining != null ? (
-          <span className="font-medium tabular-nums">
-            {formatQuestionTimer(secondsRemaining)}
-          </span>
-        ) : null}
-      </div>
-      {(loading || submitting) && !question && (
-        <p className="text-sm text-[#1F2430]/70">Preparing your question…</p>
-      )}
-      {submitting && question && (
-        <p className="text-sm text-[#1F2430]/70">
-          Answer saved — preparing your next question…
-        </p>
-      )}
-      {error && (
-        <p className="w-full max-w-2xl rounded-lg border border-[#E5484D]/30 bg-[#E5484D]/5 p-3 text-sm text-[#E5484D]">
-          {error}
-        </p>
-      )}
-      {question ? (
-        <McqCard
-          key={question.id}
-          questionId={question.id}
-          questionText={question.question_text}
-          options={question.options}
-          onSubmit={handleSubmit}
-          isSubmitting={submitting}
-        />
-      ) : (
-        !error && (
-          <p className="text-sm text-[#1F2430]/70">Loading question…</p>
-        )
-      )}
-    </div>
-  );
-}
-
-function ChatDiagramRunner({
-  sessionId,
-  totalQuestions,
-  timeLimitSeconds,
-  onLoadingChange,
-  onComplete,
-}: {
-  sessionId: string;
-  totalQuestions: number;
-  timeLimitSeconds?: number;
-  onLoadingChange: (loading: boolean) => void;
-  onComplete: () => void;
-}) {
-  const [question, setQuestion] = useState<DiagramNextQuestion | null>(null);
-  const [budget, setBudget] = useState(totalQuestions);
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const seeded = useRef(false);
-
-  const { secondsRemaining } = useQuestionTimer(
-    timeLimitSeconds,
-    question?.id ?? questionIndex,
-    {
-      enabled: Boolean(timeLimitSeconds),
-      armed: Boolean(question),
-      paused: loading || busy,
-    },
-  );
-
-  useEffect(() => {
-    onLoadingChange(loading || busy);
-  }, [busy, loading, onLoadingChange]);
-
-  useEffect(() => {
-    if (seeded.current) return;
-    seeded.current = true;
-    (async () => {
-      try {
-        const startRes = await fetch(`${API_BASE}/diagram/sessions/${sessionId}/start`, {
-          method: "POST",
-        });
-        if (!startRes.ok) {
-          const body = (await startRes.json().catch(() => ({}))) as { detail?: string };
-          throw new Error(body.detail ?? "Failed to load diagram question");
-        }
-        const startData = (await startRes.json()) as {
-          status: string;
-          total_questions: number;
-          question: DiagramNextQuestion | null;
-        };
-        setBudget(startData.total_questions);
-        if (startData.status === "ready" && startData.question) {
-          setQuestion(startData.question);
-          return;
-        }
-        const pending = await pollDiagramPendingQuestion(API_BASE, sessionId);
-        setQuestion(pending.question);
-        setBudget(pending.total_questions);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load diagram");
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [sessionId]);
-
-  if (error) {
-    return (
-      <p className="mx-auto w-full max-w-2xl rounded-lg border border-[#E5484D]/30 bg-[#E5484D]/5 p-3 text-sm text-[#E5484D]">
-        {error}
-      </p>
-    );
-  }
-
-  if (!question) {
-    return (
-      <p className="text-center text-sm text-[#1F2430]/70">Preparing your diagram…</p>
-    );
-  }
-
-  return (
-    <div className="flex flex-col items-center gap-3">
-      {secondsRemaining != null ? (
-        <div className="w-full max-w-2xl text-right text-sm font-medium tabular-nums text-[#1F2430]/70">
-          {formatQuestionTimer(secondsRemaining)}
-        </div>
-      ) : null}
-      <DiagramTool
-        key={question.id}
-        questionId={question.id}
-        svgContent={question.svg_content}
-        prompt={question.prompt}
-        questionIndex={questionIndex}
-        totalQuestions={budget}
-        sessionId={sessionId}
-        onBusyChange={setBusy}
-        onComplete={onComplete}
-        onNext={(nextQuestion) => {
-          setQuestion(nextQuestion);
-          setQuestionIndex((prev) => prev + 1);
-        }}
-      />
-    </div>
   );
 }
