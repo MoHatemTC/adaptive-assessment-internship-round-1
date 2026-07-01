@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -246,7 +247,13 @@ def test_submit_voice_session_round_trip():
     app.include_router(voice_router)
     app.dependency_overrides[get_db] = _override_get_db
 
-    with TestClient(app) as client:
+    with (
+        patch(
+            "app.proctoring.enforcement.ensure_tool_session_allowed",
+            new=AsyncMock(return_value=None),
+        ),
+        TestClient(app) as client,
+    ):
         create_response = client.post(
             "/voice/sessions",
             json={

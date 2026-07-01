@@ -20,6 +20,11 @@ from app.features.voice.schemas import VoiceAdaptiveInput
 _EVAL = "app.features.voice.evaluation"
 
 
+def _patch_traced_llm(mock_llm: AsyncMock):
+    """Patch the traced LLM gateway used by voice evaluation."""
+    return patch(f"{_EVAL}.get_llm_with_tracing", return_value=(mock_llm, []))
+
+
 @pytest.fixture
 def voice_adaptive_input() -> VoiceAdaptiveInput:
     """Minimal valid evaluation input for a single voice response."""
@@ -156,17 +161,20 @@ async def test_evaluate_flagged_session_never_calls_llm(voice_adaptive_input):
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock()
 
+    tracing_mock = MagicMock(return_value=(mock_llm, []))
+
     with (
         patch(f"{_EVAL}.async_session", return_value=_make_session_mock(mock_db)),
         patch(f"{_EVAL}.get_transcript_text", AsyncMock(return_value=("", 0.0))),
         patch(f"{_EVAL}.run_memory_agent", AsyncMock(return_value=(None, ""))),
-        patch(f"{_EVAL}.get_llm", return_value=mock_llm),
+        patch(f"{_EVAL}.get_llm_with_tracing", tracing_mock),
     ):
         result = await evaluate_voice_response(voice_adaptive_input)
 
     assert result.flagged is True
     assert result.flag_reason == "timed_out"
     assert result.memory_summary == ""
+    tracing_mock.assert_not_called()
     mock_llm.ainvoke.assert_not_called()
 
 
@@ -209,7 +217,7 @@ async def test_evaluate_clean_response_grades_and_stores(voice_adaptive_input):
             f"{_EVAL}.get_transcript_text",
             AsyncMock(return_value=("I would use RESTful endpoints with JWT.", 0.85)),
         ),
-        patch(f"{_EVAL}.get_llm", return_value=mock_llm),
+        _patch_traced_llm(mock_llm),
         patch(f"{_EVAL}._write_grade_result", AsyncMock(return_value=42)),
         patch(
             f"{_EVAL}.run_memory_agent",
@@ -302,7 +310,7 @@ async def test_communication_signals_computed_on_clean_transcript(
             f"{_EVAL}.get_transcript_text",
             AsyncMock(return_value=(transcript, 0.80)),
         ),
-        patch(f"{_EVAL}.get_llm", return_value=mock_llm),
+        _patch_traced_llm(mock_llm),
         patch(f"{_EVAL}._write_grade_result", AsyncMock(return_value=1)),
         patch(
             f"{_EVAL}.run_memory_agent",
