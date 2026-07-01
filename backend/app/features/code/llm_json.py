@@ -8,7 +8,8 @@ from typing import TypeVar
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -79,6 +80,7 @@ async def invoke_json_model(
     model_cls: type[T],
     messages: list[tuple[str, str]],
     model: str | None = None,
+    trace: LangfuseTraceContext | None = None,
 ) -> T:
     """Single-shot JSON generation with reasoning-model-safe text extraction."""
     llm, callbacks = get_llm_with_tracing(model)
@@ -86,7 +88,7 @@ async def invoke_json_model(
     try:
         response = await bound.ainvoke(
             messages,
-            config={"callbacks": callbacks},
+            config=llm_invoke_config(callbacks, trace=trace),
         )
     except Exception as exc:
         if _is_llm_unavailable(exc):

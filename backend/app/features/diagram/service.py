@@ -11,6 +11,8 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core import llm as llm_gateway
+from app.core.llm import llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.logging import get_logger
 from app.features.diagram.models import (
     DiagramQuestion,
@@ -190,6 +192,7 @@ async def submit_response(
         correct_label=question.correct_label,
         rubric=question.rubric,
         answer_text=answer_text,
+        session_id=session_id,
     )
     response.score = grading["score"]
     response.grading_feedback = grading["feedback"]
@@ -209,7 +212,13 @@ async def submit_response(
     }
 
 
-async def grade_answer(correct_label: str, rubric: str, answer_text: str) -> dict:
+async def grade_answer(
+    correct_label: str,
+    rubric: str,
+    answer_text: str,
+    *,
+    session_id: str | None = None,
+) -> dict:
     system_prompt = f"""
 You are a silent diagram assessment grader.
 The learner was shown an architecture/system diagram with one component label
@@ -233,7 +242,14 @@ Rules:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=f"Learner's answer: {answer_text}"),
             ],
-            config={"callbacks": callbacks},
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(
+                    session_id=session_id,
+                    operation="diagram_grade",
+                    tool="diagram",
+                ),
+            ),
         )
         parsed = _extract_json_from_llm_response(response.content)
         score = float(parsed.get("score", 0))

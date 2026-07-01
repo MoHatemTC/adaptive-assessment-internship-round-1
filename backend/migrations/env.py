@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.database import Base
 import app.admin.models  # noqa: F401 — registers Assessment with Base.metadata
+import app.admin.invite_models  # noqa: F401 — registers AssessmentInvite
 import app.features.mcq.models  # noqa: F401 — registers MCQ tables
 import app.features.voice.models  # noqa: F401 — registers voice tables
 import app.proctoring.models  # noqa: F401 — registers ProctoringEvent

@@ -19,7 +19,8 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.logging import get_logger
 from app.core.metrics import record_llm_call
 from app.features.mcq.service import create_question
@@ -264,7 +265,18 @@ async def generate_and_store_next_mcq(
     start_time = time.perf_counter()
 
     try:
-        response = await llm.ainvoke(messages, config={"callbacks": callbacks})
+        response = await llm.ainvoke(
+            messages,
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(
+                    session_id=next_plan.get("session_id"),
+                    operation="mcq_generation",
+                    tool="mcq",
+                    question_index=next_plan.get("question_index"),
+                ),
+            ),
+        )
         duration = time.perf_counter() - start_time
 
         record_llm_call(

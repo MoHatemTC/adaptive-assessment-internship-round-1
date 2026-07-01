@@ -10,6 +10,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core import llm as llm_gateway
+from app.core.llm import llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.logging import get_logger
 from app.core.metrics import record_llm_call
 from app.features.diagram.service import create_question
@@ -204,7 +206,18 @@ async def generate_and_store_next_diagram(
 
     start_time = time.perf_counter()
     try:
-        response = await llm.ainvoke(messages, config={"callbacks": callbacks})
+        response = await llm.ainvoke(
+            messages,
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(
+                    session_id=next_plan.get("session_id"),
+                    operation="diagram_generation",
+                    tool="diagram",
+                    question_index=next_plan.get("question_index"),
+                ),
+            ),
+        )
         duration = time.perf_counter() - start_time
         record_llm_call(
             model=model_name,

@@ -19,7 +19,8 @@ from sqlalchemy import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import get_settings
-from app.core.llm import get_llm_with_tracing
+from app.core.llm import get_llm_with_tracing, llm_invoke_config
+from app.core.tracing import LangfuseTraceContext
 from app.core.llm_json import extract_llm_text, parse_llm_json
 from app.core.logging import get_logger
 from app.core.metrics import record_llm_call
@@ -193,7 +194,13 @@ async def run_session_judge(
                 SystemMessage(content=_SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
             ],
-            config={"callbacks": callbacks},
+            config=llm_invoke_config(
+                callbacks,
+                trace=LangfuseTraceContext(
+                    session_id=session_id,
+                    operation="session_judge",
+                ),
+            ),
         )
         duration = time.perf_counter() - start
         record_llm_call(model, "session_judge", "success", duration)
