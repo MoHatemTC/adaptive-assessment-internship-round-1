@@ -7,7 +7,7 @@ import { pollMcqPendingQuestion } from "@/hooks/useQuestionTimer";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
-interface McqQuestion {
+export interface McqQuestion {
   id: number;
   question_text: string;
   options: { label: string; text: string }[];
@@ -22,19 +22,42 @@ export interface McqDriverState {
   submit: (questionId: number, selectedLabel: string) => Promise<SubmitResult>;
 }
 
+export interface McqDriverOptions {
+  initialPayload?: McqQuestion | null;
+  initialQuestionIndex?: number;
+  skipBootstrap?: boolean;
+}
+
 export function useMcqDriver(
   sessionId: string,
   totalQuestions: number,
+  options?: McqDriverOptions,
 ): McqDriverState {
-  const [question, setQuestion] = useState<McqQuestion | null>(null);
+  const {
+    initialPayload = null,
+    initialQuestionIndex = 0,
+    skipBootstrap = false,
+  } = options ?? {};
+
+  const [question, setQuestion] = useState<McqQuestion | null>(initialPayload);
   const [budget, setBudget] = useState(totalQuestions);
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [questionIndex, setQuestionIndex] = useState(initialQuestionIndex);
+  const [loading, setLoading] = useState(!skipBootstrap && !initialPayload);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const seeded = useRef(false);
 
   useEffect(() => {
+    if (skipBootstrap) {
+      setLoading(false);
+      return;
+    }
+    if (initialPayload) {
+      setQuestion(initialPayload);
+      setQuestionIndex(initialQuestionIndex);
+      setLoading(false);
+      return;
+    }
     if (seeded.current) return;
     seeded.current = true;
     (async () => {
@@ -67,7 +90,7 @@ export function useMcqDriver(
         setLoading(false);
       }
     })();
-  }, [sessionId]);
+  }, [sessionId, skipBootstrap, initialPayload, initialQuestionIndex]);
 
   const submit = useCallback(
     async (questionId: number, selectedLabel: string): Promise<SubmitResult> => {
@@ -121,15 +144,17 @@ export function useMcqDriver(
           setLoading(true);
           const pending = await pollMcqPendingQuestion(API_BASE, sessionId);
           const nextQ = pending.question;
+          const nextIndex = questionIndex + 1;
           setQuestion(nextQ);
           setBudget(pending.total_questions);
-          setQuestionIndex((prev) => prev + 1);
+          setQuestionIndex(nextIndex);
           return {
             answerMessage,
             step: {
               tool: "mcq" as ToolType,
               isToolComplete: false,
               nextPayload: nextQ,
+              nextQuestionIndex: nextIndex,
               transitionText: "Got it — next question…",
             },
           };
@@ -148,14 +173,16 @@ export function useMcqDriver(
         }
 
         const nextQ = data.next_question;
+        const nextIndex = questionIndex + 1;
         setQuestion(nextQ);
-        setQuestionIndex((prev) => prev + 1);
+        setQuestionIndex(nextIndex);
         return {
           answerMessage,
           step: {
             tool: "mcq" as ToolType,
             isToolComplete: false,
             nextPayload: nextQ,
+            nextQuestionIndex: nextIndex,
             transitionText: "Got it — next question…",
           },
         };

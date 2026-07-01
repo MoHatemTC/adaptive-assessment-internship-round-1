@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
@@ -40,6 +40,8 @@ export default function AssessmentChatPage() {
   const currentMessageId = useRef<string | null>(null);
   const started = useRef(false);
   const advancing = useRef(false);
+  const [isAdvancing, setIsAdvancing] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const completeHref = useMemo(() => {
     const sid = sessionId ?? search.get("session_id");
@@ -49,7 +51,12 @@ export default function AssessmentChatPage() {
   }, [sessionId, search, token]);
 
   const firstQuestionForTool = useCallback(
-    (tool: string, totalForTool: number, difficulty?: string, timeLimitSeconds?: number | null) => {
+    (
+      tool: string,
+      totalForTool: number,
+      difficulty?: string,
+      timeLimitSeconds?: number | null,
+    ) => {
       const msgId = pushToolQuestion(
         tool as ToolType,
         null,
@@ -70,7 +77,10 @@ export default function AssessmentChatPage() {
     const stored = readSessionAuth();
     const sid = search.get("session_id") ?? stored.sessionId;
     const tok = stored.token;
-    if (!sid || !tok) return;
+    if (!sid || !tok) {
+      setStartError("Missing session credentials. Please restart the assessment.");
+      return;
+    }
 
     setSession(sid, tok);
 
@@ -89,7 +99,12 @@ export default function AssessmentChatPage() {
           );
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("Failed to start assessment chat", err);
+        setStartError(
+          err instanceof Error ? err.message : "Could not start assessment",
+        );
+      });
   }, [search, setSession, setCurrentTool, setIsComplete, firstQuestionForTool]);
 
   useEffect(() => {
@@ -99,18 +114,23 @@ export default function AssessmentChatPage() {
 
   const handleAnswered = useCallback(
     async (result: SubmitResult) => {
-      const { answerMessage, step } = result;
+      const { answerMessage, step, phase = "final" } = result;
 
-      if (currentMessageId.current) {
-        markAnswered(currentMessageId.current);
+      if (phase === "preview") {
+        if (currentMessageId.current) {
+          markAnswered(currentMessageId.current);
+        }
+        pushUserAnswer(answerMessage.tool, answerMessage.summary);
+        pushTransition(step.transitionText);
+        return;
       }
 
-      pushUserAnswer(answerMessage.tool, answerMessage.summary);
       pushTransition(step.transitionText);
 
       if (step.isToolComplete) {
         if (advancing.current) return;
         advancing.current = true;
+        setIsAdvancing(true);
 
         try {
           const advanceResult = await advanceExaminer();
@@ -128,17 +148,20 @@ export default function AssessmentChatPage() {
               advanceResult.nextToolInfo.time_limit_seconds,
             );
           }
-        } catch {
-          // error handled by store
+        } catch (err) {
+          console.error("Failed to advance examiner", err);
         } finally {
           advancing.current = false;
+          setIsAdvancing(false);
         }
       } else if (step.nextPayload) {
         const msgId = pushToolQuestion(
           step.tool,
           step.nextPayload,
-          0,
+          step.nextQuestionIndex ?? 0,
           currentToolInfo?.total_for_tool ?? 1,
+          currentToolInfo?.difficulty,
+          currentToolInfo?.time_limit_seconds,
         );
         currentMessageId.current = msgId;
       }
@@ -154,6 +177,24 @@ export default function AssessmentChatPage() {
     ],
   );
 
+  const chatContextValue = useMemo(
+    () => ({
+      assessmentToken: token,
+      onAnswered: handleAnswered,
+    }),
+    [token, handleAnswered],
+  );
+
+  if (startError) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-surface px-4">
+        <p className="rounded-lg border border-[#E5484D]/30 bg-[#E5484D]/5 p-4 text-sm text-[#E5484D]">
+          {startError}
+        </p>
+      </main>
+    );
+  }
+
   if (!sessionId || !accessToken) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-surface px-4">
@@ -161,8 +202,6 @@ export default function AssessmentChatPage() {
       </main>
     );
   }
-
-  const isBusy = advancing.current;
 
   return (
     <main className="min-h-screen bg-surface px-4 py-8">
@@ -177,7 +216,7 @@ export default function AssessmentChatPage() {
         <AssessmentTimerShell
           sessionId={sessionId}
           accessToken={accessToken}
-          paused={isBusy}
+          paused={isAdvancing}
         />
 
         <div className="mx-auto mb-6 w-full max-w-2xl">
@@ -186,7 +225,7 @@ export default function AssessmentChatPage() {
           </p>
         </div>
 
-        <ChatContext.Provider value={{ onAnswered: handleAnswered }}>
+        <ChatContext.Provider value={chatContextValue}>
           <ChatWindow messages={messages} />
         </ChatContext.Provider>
       </SessionProctoringShell>

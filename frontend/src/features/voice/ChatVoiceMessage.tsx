@@ -1,13 +1,24 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
+import { AnsweredToolPlaceholder } from "@/components/chat/AnsweredToolPlaceholder";
 import type { SubmitResult, ToolQuestionMessage } from "@/types/chat";
+import {
+  buildPreviewResult,
+  runSubmitWithPreview,
+} from "@/features/chat/submitWithPreview";
 import { useChatStore } from "@/store/chatStore";
 import VoiceRecorder from "@/features/voice/VoiceRecorder";
-import { useVoiceDriver } from "@/features/voice/useVoiceDriver";
+import { type Difficulty } from "@/lib/voice-api";
+import {
+  type VoiceQuestionPayload,
+  useVoiceDriver,
+} from "@/features/voice/useVoiceDriver";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+const DEFAULT_VOICE_QUESTION =
+  "Tell me about a recent technical challenge you faced and how you solved it.";
 
 function getWsBase(): string {
   return API_BASE.replace(/^https/, "wss").replace(/^http/, "ws");
@@ -15,40 +26,54 @@ function getWsBase(): string {
 
 interface ChatVoiceMessageProps {
   message: ToolQuestionMessage;
-  onAnswered: (result: SubmitResult) => void;
+  onAnswered: (result: SubmitResult) => void | Promise<void>;
 }
 
 export function ChatVoiceMessage({ message, onAnswered }: ChatVoiceMessageProps) {
   const sessionId = useChatStore((s) => s.sessionId) ?? "";
+  const bootstrapPayload = message.payload as VoiceQuestionPayload | null;
+  const isAnswered = message.status === "answered";
+  const initialDifficulty = (message.difficulty as Difficulty | undefined) ?? "beginner";
+
   const driver = useVoiceDriver({
     sessionId,
-    initialQuestion: "",
-    initialDifficulty: "beginner",
+    initialQuestion: DEFAULT_VOICE_QUESTION,
+    initialDifficulty,
+    initialQuestionIndex: message.questionIndex,
     timeLimitSeconds: message.timeLimitSeconds ?? 120,
     learnerProfile: {},
-    adminConfig: {},
-    maxQuestions: message.totalForTool,
-  });
-
-  const handleRecordingComplete = useCallback(
-    async () => {
-      try {
-        const result = await driver.submit();
-        onAnswered(result);
-      } catch {
-        // error surfaced via driver.error
-      }
+    adminConfig: {
+      max_difficulty: "advanced",
+      max_questions: message.totalForTool,
     },
-    [driver, onAnswered],
-  );
+    maxQuestions: message.totalForTool,
+    bootstrapPayload,
+    skipBootstrap: isAnswered,
+  });
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const handleRecordingComplete = useCallback(async () => {
+    setSubmitError(null);
+    const preview = buildPreviewResult("voice", "Voice response submitted");
+    try {
+      await runSubmitWithPreview(preview, () => driver.submit(), onAnswered);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Voice submit failed";
+      setSubmitError(msg);
+    }
+  }, [driver, onAnswered]);
 
   const wsUrl = `${getWsBase()}/voice/sessions`;
 
-  if (driver.phase === "error") {
+  if (isAnswered) {
+    return <AnsweredToolPlaceholder message={message} />;
+  }
+
+  if (driver.phase === "error" || submitError) {
     return (
       <div className="rounded-2xl border border-[#E5484D]/30 bg-[#E5484D]/5 px-4 py-3">
         <p className="text-sm text-[#E5484D]">
-          {driver.error ?? "An unexpected error occurred."}
+          {submitError ?? driver.error ?? "An unexpected error occurred."}
         </p>
         <button
           type="button"
@@ -68,7 +93,7 @@ export function ChatVoiceMessage({ message, onAnswered }: ChatVoiceMessageProps)
         className="rounded-2xl border border-[#D8DDF0] bg-white px-8 py-7 shadow-sm"
       >
         <p className="text-lg font-medium leading-relaxed text-[#1F2430]">
-          {driver.questionText || "Tell me about a recent technical challenge you faced and how you solved it."}
+          {driver.questionText || DEFAULT_VOICE_QUESTION}
         </p>
       </div>
 
@@ -119,28 +144,6 @@ export function ChatVoiceMessage({ message, onAnswered }: ChatVoiceMessageProps)
             ))}
           </div>
           <p className="mt-3 text-sm text-[#343434]">Analyzing your response…</p>
-        </div>
-      )}
-
-      {driver.phase === "transitioning" && (
-        <div className="flex flex-col items-center rounded-2xl border border-[#D8DDF0] bg-white px-6 py-7 shadow-sm">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width={24}
-            height={24}
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#004EFF"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="h-6 w-6"
-            aria-hidden="true"
-          >
-            <line x1="5" y1="12" x2="19" y2="12" />
-            <polyline points="12 5 19 12 12 19" />
-          </svg>
-          <p className="mt-3 text-sm text-[#343434]">Loading next…</p>
         </div>
       )}
     </div>

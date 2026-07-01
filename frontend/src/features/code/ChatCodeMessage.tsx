@@ -1,80 +1,111 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
-import type { SubmitResult, ToolQuestionMessage, UserAnswerMessage } from "@/types/chat";
+import { AnsweredToolPlaceholder } from "@/components/chat/AnsweredToolPlaceholder";
+import type { AdaptiveContract } from "@/lib/api";
+import type { SubmitResult, ToolQuestionMessage } from "@/types/chat";
+import {
+  buildPreviewResult,
+  buildUserAnswerMessage,
+} from "@/features/chat/submitWithPreview";
+import { useChatContext } from "@/features/chat/chatContext";
 import { useChatStore } from "@/store/chatStore";
 import { CodeEditor } from "@/features/code/CodeEditor";
 import { CodeQuestionPanel } from "@/features/code/CodeQuestionPanel";
-import { useCodeDriver } from "@/features/code/useCodeDriver";
+import {
+  type CodeQuestionPayload,
+  useCodeDriver,
+} from "@/features/code/useCodeDriver";
 import { generateCodeChallenge } from "@/lib/api";
 
 interface ChatCodeMessageProps {
   message: ToolQuestionMessage;
-  onAnswered: (result: SubmitResult) => void;
+  onAnswered: (result: SubmitResult) => void | Promise<void>;
 }
 
 export function ChatCodeMessage({ message, onAnswered }: ChatCodeMessageProps) {
   const sessionId = useChatStore((s) => s.sessionId) ?? "";
+  const { assessmentToken } = useChatContext();
+  const bootstrapPayload = message.payload as CodeQuestionPayload | null;
+  const isAnswered = message.status === "answered";
 
   const driver = useCodeDriver({
     sessionId,
-    assessmentId: "",
+    assessmentId: assessmentToken,
     maxQuestions: message.totalForTool,
+    bootstrapPayload,
+    skipBootstrap: isAnswered,
   });
 
-  const [challenge, setChallenge] = useState(driver.challenge);
   const [generatingNext, setGeneratingNext] = useState(false);
-
-  useEffect(() => {
-    if (driver.challenge) setChallenge(driver.challenge);
-  }, [driver.challenge]);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const challenge = driver.challenge;
 
   const handleSubmitted = useCallback(
-    async ({ contract: newContract }: { contract: { stop: boolean; question_index: number } }) => {
+    async ({ contract: newContract }: { contract: AdaptiveContract }) => {
+      setSubmitError(null);
       const answered = newContract.question_index;
       const reachedLimit =
         message.totalForTool > 0 && answered >= message.totalForTool;
+      const isToolComplete = newContract.stop || reachedLimit;
 
-      const answerMessage: UserAnswerMessage = {
-        id: `ans-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        kind: "user_answer",
-        role: "user",
-        createdAt: Date.now(),
-        tool: "code",
-        summary: "Submitted code solution",
-      };
+      const preview = buildPreviewResult("code", "Submitted code solution");
+      await onAnswered({ ...preview, phase: "preview" });
 
-      if (newContract.stop || reachedLimit) {
-        onAnswered({
-          answerMessage,
-          step: {
-            tool: "code",
-            isToolComplete: true,
-            nextPayload: null,
-            transitionText: "Got it — next question…",
-          },
-        });
-        return;
-      }
-
-      setGeneratingNext(true);
       try {
-        const result = await generateCodeChallenge({
+        if (isToolComplete) {
+          await onAnswered({
+            answerMessage: preview.answerMessage,
+            step: {
+              tool: "code",
+              isToolComplete: true,
+              nextPayload: null,
+              transitionText: "Got it — next question…",
+            },
+            phase: "final",
+          });
+          return;
+        }
+
+        setGeneratingNext(true);
+        const nextChallenge = await generateCodeChallenge({
           session_id: sessionId,
-          assessment_id: "",
-          contract: newContract as Parameters<typeof generateCodeChallenge>[0]["contract"],
+          assessment_id: assessmentToken,
+          contract: newContract,
           language: driver.language,
         });
-        setChallenge(result.challenge);
-      } catch {
-        // error surfaced via driver
+
+        await onAnswered({
+          answerMessage: buildUserAnswerMessage("code", "Submitted code solution"),
+          step: {
+            tool: "code",
+            isToolComplete: false,
+            nextPayload: {
+              challenge: nextChallenge.challenge,
+              contract: nextChallenge.contract,
+              questionIndex: nextChallenge.contract.question_index,
+              difficulty: nextChallenge.contract.difficulty,
+            } satisfies CodeQuestionPayload,
+            nextQuestionIndex: nextChallenge.contract.question_index,
+            transitionText: "Got it — next question…",
+          },
+          phase: "final",
+        });
+      } catch (err) {
+        console.error("Code submit failed", err);
+        const msg = err instanceof Error ? err.message : "Submit failed";
+        setSubmitError(msg);
       } finally {
         setGeneratingNext(false);
       }
     },
-    [message.totalForTool, sessionId, driver.language, onAnswered],
+    [message.totalForTool, sessionId, assessmentToken, driver.language, onAnswered],
   );
+
+  if (isAnswered) {
+    return <AnsweredToolPlaceholder message={message} />;
+  }
 
   if (driver.status === "loading" && !challenge) {
     return (
@@ -85,10 +116,10 @@ export function ChatCodeMessage({ message, onAnswered }: ChatCodeMessageProps) {
     );
   }
 
-  if (driver.status === "error" && !challenge) {
+  if ((driver.status === "error" && !challenge) || submitError) {
     return (
       <div className="rounded-2xl border border-[#E5484D]/30 bg-[#E5484D]/5 px-4 py-3">
-        <p className="text-sm text-[#E5484D]">{driver.error}</p>
+        <p className="text-sm text-[#E5484D]">{submitError ?? driver.error}</p>
       </div>
     );
   }
@@ -107,7 +138,7 @@ export function ChatCodeMessage({ message, onAnswered }: ChatCodeMessageProps) {
         key={`${challenge.id}-${driver.questionIndex}`}
         challenge={challenge}
         sessionId={sessionId}
-        assessmentId=""
+        assessmentId={assessmentToken}
         questionIndex={driver.questionIndex}
         difficulty={driver.difficulty}
         onSubmitted={handleSubmitted}

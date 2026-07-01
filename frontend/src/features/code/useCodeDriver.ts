@@ -13,6 +13,13 @@ import {
   listCodeLanguages,
 } from "@/lib/api";
 
+export interface CodeQuestionPayload {
+  challenge: ChallengeRead;
+  contract: AdaptiveContract;
+  questionIndex: number;
+  difficulty: DifficultyLevel;
+}
+
 export interface CodeDriverState {
   status: "loading" | "ready" | "submitting" | "generating_next" | "complete" | "error";
   challenge: ChallengeRead | null;
@@ -32,23 +39,35 @@ interface UseCodeDriverOptions {
   sessionId: string;
   assessmentId: string;
   maxQuestions?: number;
+  bootstrapPayload?: CodeQuestionPayload | null;
+  skipBootstrap?: boolean;
 }
 
 export function useCodeDriver({
   sessionId,
   assessmentId,
   maxQuestions,
+  bootstrapPayload = null,
+  skipBootstrap = false,
 }: UseCodeDriverOptions): CodeDriverState {
   const [languages, setLanguages] = useState<
     { id: SupportedLanguage; label: string; monaco_language: string }[]
   >([]);
   const [language, setLanguage] = useState<SupportedLanguage>("python");
-  const [challenge, setChallenge] = useState<ChallengeRead | null>(null);
-  const [contract, setContract] = useState<AdaptiveContract | null>(null);
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [difficulty, setDifficulty] = useState<DifficultyLevel>("beginner");
+  const [challenge, setChallenge] = useState<ChallengeRead | null>(
+    bootstrapPayload?.challenge ?? null,
+  );
+  const [contract, setContract] = useState<AdaptiveContract | null>(
+    bootstrapPayload?.contract ?? null,
+  );
+  const [questionIndex, setQuestionIndex] = useState(
+    bootstrapPayload?.questionIndex ?? 0,
+  );
+  const [difficulty, setDifficulty] = useState<DifficultyLevel>(
+    bootstrapPayload?.difficulty ?? "beginner",
+  );
   const [questionsAnswered, setQuestionsAnswered] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!skipBootstrap && !bootstrapPayload);
   const [submitting, setSubmitting] = useState(false);
   const [generatingNext, setGeneratingNext] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,14 +119,28 @@ export function useCodeDriver({
   }, []);
 
   useEffect(() => {
+    if (skipBootstrap) {
+      setLoading(false);
+      return;
+    }
+    if (bootstrapPayload) {
+      setChallenge(bootstrapPayload.challenge);
+      setContract(bootstrapPayload.contract);
+      setQuestionIndex(bootstrapPayload.questionIndex);
+      setDifficulty(bootstrapPayload.difficulty);
+      setLoading(false);
+      started.current = true;
+      return;
+    }
     if (started.current) return;
     started.current = true;
     setLoading(true);
     loadGeneratedChallenge()
-      .catch(() => {})
+      .catch((err) => {
+        console.error("Failed to load code challenge", err);
+      })
       .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [skipBootstrap, bootstrapPayload, loadGeneratedChallenge]);
 
   const submit = useCallback(
     async (code: string): Promise<SubmitResult> => {
@@ -184,7 +217,8 @@ export function useCodeDriver({
               contract: nextChallenge.contract,
               questionIndex: nextChallenge.contract.question_index,
               difficulty: nextChallenge.contract.difficulty,
-            },
+            } satisfies CodeQuestionPayload,
+            nextQuestionIndex: nextChallenge.contract.question_index,
             transitionText: "Got it — next question…",
           },
         };

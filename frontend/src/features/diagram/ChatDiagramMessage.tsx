@@ -2,43 +2,78 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { AnsweredToolPlaceholder } from "@/components/chat/AnsweredToolPlaceholder";
+import type { DiagramNextQuestion } from "@/features/diagram/useDiagramDriver";
 import type { SubmitResult, ToolQuestionMessage } from "@/types/chat";
+import {
+  buildPreviewResult,
+  runSubmitWithPreview,
+} from "@/features/chat/submitWithPreview";
 import { useChatStore } from "@/store/chatStore";
 import { useDiagramDriver } from "@/features/diagram/useDiagramDriver";
+import {
+  formatQuestionTimer,
+  useQuestionTimer,
+} from "@/hooks/useQuestionTimer";
 
 interface ChatDiagramMessageProps {
   message: ToolQuestionMessage;
-  onAnswered: (result: SubmitResult) => void;
+  onAnswered: (result: SubmitResult) => void | Promise<void>;
 }
 
 export function ChatDiagramMessage({ message, onAnswered }: ChatDiagramMessageProps) {
   const sessionId = useChatStore((s) => s.sessionId);
-  const driver = useDiagramDriver(sessionId ?? "", message.totalForTool);
+  const initialPayload = message.payload as DiagramNextQuestion | null;
+  const isAnswered = message.status === "answered";
+
+  const driver = useDiagramDriver(sessionId ?? "", message.totalForTool, {
+    initialPayload,
+    initialQuestionIndex: message.questionIndex,
+    skipBootstrap: isAnswered,
+  });
   const question = driver.currentPayload;
   const [answer, setAnswer] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [showQuestion, setShowQuestion] = useState(false);
+  const [showQuestion, setShowQuestion] = useState(Boolean(initialPayload));
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const timerPaused = submitting || driver.status === "submitting" || driver.status === "loading";
+  const { secondsRemaining } = useQuestionTimer(message.timeLimitSeconds ?? undefined, question?.id ?? driver.questionIndex, {
+    enabled: Boolean(message.timeLimitSeconds),
+    armed: Boolean(question) && !isAnswered,
+    paused: timerPaused,
+  });
 
   useEffect(() => {
     if (question) {
-      setShowQuestion(false);
+      setShowQuestion(Boolean(initialPayload));
       setAnswer("");
     }
-  }, [question?.id, question]);
+  }, [question?.id, question, initialPayload]);
 
   const handleSubmit = useCallback(async () => {
     if (!question || !answer.trim() || submitting) return;
     setSubmitting(true);
+    setSubmitError(null);
+    const summary = answer.trim();
+    const preview = buildPreviewResult("diagram", `Submitted: ${summary}`);
     try {
-      const qId = question.id;
-      const ans = answer.trim();
-      const result = await driver.submit(qId, ans, driver.questionIndex);
-      setSubmitting(false);
-      onAnswered(result);
-    } catch {
+      await runSubmitWithPreview(
+        preview,
+        () => driver.submit(question.id, summary, driver.questionIndex),
+        onAnswered,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Submit failed";
+      setSubmitError(msg);
+    } finally {
       setSubmitting(false);
     }
   }, [question, answer, submitting, driver, onAnswered]);
+
+  if (isAnswered) {
+    return <AnsweredToolPlaceholder message={message} />;
+  }
 
   if (driver.status === "loading" && !question) {
     return (
@@ -49,10 +84,10 @@ export function ChatDiagramMessage({ message, onAnswered }: ChatDiagramMessagePr
     );
   }
 
-  if (driver.status === "error" && !question) {
+  if ((driver.status === "error" && !question) || submitError) {
     return (
       <div className="rounded-2xl border border-[#E5484D]/30 bg-[#E5484D]/5 px-4 py-3">
-        <p className="text-sm text-[#E5484D]">{driver.error}</p>
+        <p className="text-sm text-[#E5484D]">{submitError ?? driver.error}</p>
       </div>
     );
   }
@@ -68,6 +103,7 @@ export function ChatDiagramMessage({ message, onAnswered }: ChatDiagramMessagePr
           </span>
           <span className="text-xs text-[#A0A8B8]">
             Question {driver.questionIndex + 1} / {message.totalForTool}
+            {secondsRemaining != null ? ` · ${formatQuestionTimer(secondsRemaining)}` : ""}
           </span>
         </div>
         <h2 className="mb-4 text-[18px] font-semibold text-[#1F2430]">
@@ -94,6 +130,16 @@ export function ChatDiagramMessage({ message, onAnswered }: ChatDiagramMessagePr
 
   return (
     <div className="w-full max-w-2xl rounded-[24px] border border-[#D8DDF0] bg-[#FBFBFD] p-6 shadow-sm">
+      <div className="mb-2 flex items-center justify-between text-xs text-[#1F2430]/70">
+        <span>
+          Question {driver.questionIndex + 1} / {message.totalForTool}
+        </span>
+        {secondsRemaining != null ? (
+          <span className="font-medium tabular-nums">
+            {formatQuestionTimer(secondsRemaining)}
+          </span>
+        ) : null}
+      </div>
       <div
         className="mb-4 overflow-hidden rounded-xl border border-[#D8DDF0] bg-white"
         style={{ maxHeight: 180, overflow: "hidden" }}
@@ -118,9 +164,11 @@ export function ChatDiagramMessage({ message, onAnswered }: ChatDiagramMessagePr
         disabled={submitting || driver.status === "submitting"}
         className="w-full rounded-2xl border border-[#D8DDF0] bg-white px-4 py-3 text-sm text-[#1F2430] placeholder-[#A0A8B8] outline-none transition focus:border-[#004EFF] focus:ring-2 focus:ring-[#004EFF]/10 disabled:opacity-60"
       />
-      {driver.status === "error" && driver.error && (
-        <p className="mt-2 text-xs font-medium text-[#E5484D]">{driver.error}</p>
-      )}
+      {(driver.status === "error" && driver.error) || submitError ? (
+        <p className="mt-2 text-xs font-medium text-[#E5484D]">
+          {submitError ?? driver.error}
+        </p>
+      ) : null}
       <button
         type="button"
         onClick={handleSubmit}

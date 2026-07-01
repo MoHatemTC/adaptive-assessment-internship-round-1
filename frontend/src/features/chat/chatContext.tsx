@@ -5,7 +5,8 @@ import { createContext, useContext } from "react";
 import type { SubmitResult } from "@/types/chat";
 
 export interface ChatContextValue {
-  onAnswered: (result: SubmitResult) => void;
+  assessmentToken: string;
+  onAnswered: (result: SubmitResult) => void | Promise<void>;
 }
 
 export const ChatContext = createContext<ChatContextValue | null>(null);

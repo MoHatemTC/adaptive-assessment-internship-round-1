@@ -24,19 +24,42 @@ export interface DiagramDriverState {
   submit: (questionId: number, answerText: string, currentQuestionIndex: number) => Promise<SubmitResult>;
 }
 
+export interface DiagramDriverOptions {
+  initialPayload?: DiagramNextQuestion | null;
+  initialQuestionIndex?: number;
+  skipBootstrap?: boolean;
+}
+
 export function useDiagramDriver(
   sessionId: string,
   totalQuestions: number,
+  options?: DiagramDriverOptions,
 ): DiagramDriverState {
-  const [question, setQuestion] = useState<DiagramNextQuestion | null>(null);
+  const {
+    initialPayload = null,
+    initialQuestionIndex = 0,
+    skipBootstrap = false,
+  } = options ?? {};
+
+  const [question, setQuestion] = useState<DiagramNextQuestion | null>(initialPayload);
   const [budget, setBudget] = useState(totalQuestions);
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [questionIndex, setQuestionIndex] = useState(initialQuestionIndex);
+  const [loading, setLoading] = useState(!skipBootstrap && !initialPayload);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const seeded = useRef(false);
 
   useEffect(() => {
+    if (skipBootstrap) {
+      setLoading(false);
+      return;
+    }
+    if (initialPayload) {
+      setQuestion(initialPayload);
+      setQuestionIndex(initialQuestionIndex);
+      setLoading(false);
+      return;
+    }
     if (seeded.current) return;
     seeded.current = true;
     (async () => {
@@ -69,7 +92,7 @@ export function useDiagramDriver(
         setLoading(false);
       }
     })();
-  }, [sessionId]);
+  }, [sessionId, skipBootstrap, initialPayload, initialQuestionIndex]);
 
   const submit = useCallback(
     async (questionId: number, answerText: string, currentQuestionIndex: number): Promise<SubmitResult> => {
@@ -119,28 +142,32 @@ export function useDiagramDriver(
 
         if (data.status === "generating" || !data.next_question) {
           const pending = await pollDiagramPendingQuestion(API_BASE, sessionId);
+          const nextIndex = currentQuestionIndex + 1;
           setQuestion(pending.question);
-          setQuestionIndex((prev) => prev + 1);
+          setQuestionIndex(nextIndex);
           return {
             answerMessage,
             step: {
               tool: "diagram" as ToolType,
               isToolComplete: false,
               nextPayload: pending.question,
+              nextQuestionIndex: nextIndex,
               transitionText: "Got it — next question…",
             },
           };
         }
 
         const nextQ = data.next_question;
+        const nextIndex = currentQuestionIndex + 1;
         setQuestion(nextQ);
-        setQuestionIndex((prev) => prev + 1);
+        setQuestionIndex(nextIndex);
         return {
           answerMessage,
           step: {
             tool: "diagram" as ToolType,
             isToolComplete: false,
             nextPayload: nextQ,
+            nextQuestionIndex: nextIndex,
             transitionText: "Got it — next question…",
           },
         };

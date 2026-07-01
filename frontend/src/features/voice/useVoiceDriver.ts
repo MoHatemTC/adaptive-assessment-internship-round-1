@@ -19,6 +19,13 @@ export type VoicePhase =
   | "complete"
   | "error";
 
+export interface VoiceQuestionPayload {
+  questionText: string;
+  difficulty: Difficulty;
+  questionIndex: number;
+  followUpDepth?: FollowUpDepth;
+}
+
 export interface VoiceDriverState {
   phase: VoicePhase;
   questionText: string;
@@ -36,27 +43,38 @@ interface UseVoiceDriverOptions {
   sessionId: string;
   initialQuestion: string;
   initialDifficulty: Difficulty;
+  initialQuestionIndex?: number;
   timeLimitSeconds?: number;
   learnerProfile: Record<string, unknown>;
   adminConfig: Record<string, unknown>;
   maxQuestions?: number;
+  bootstrapPayload?: VoiceQuestionPayload | null;
+  skipBootstrap?: boolean;
 }
 
 export function useVoiceDriver({
   sessionId,
   initialQuestion,
   initialDifficulty,
+  initialQuestionIndex = 0,
   timeLimitSeconds = 120,
   learnerProfile,
   adminConfig,
   maxQuestions: maxQ,
+  bootstrapPayload = null,
+  skipBootstrap = false,
 }: UseVoiceDriverOptions): VoiceDriverState {
-  const [phase, setPhase] = useState<VoicePhase>("initializing");
-  const [questionText, setQuestionText] = useState(initialQuestion);
-  const [difficulty, setDifficulty] = useState<Difficulty>(initialDifficulty);
-  const [questionIndex, setQuestionIndex] = useState(0);
+  const bootstrapQuestion = bootstrapPayload?.questionText ?? initialQuestion;
+  const bootstrapDifficulty = bootstrapPayload?.difficulty ?? initialDifficulty;
+  const bootstrapIndex = bootstrapPayload?.questionIndex ?? initialQuestionIndex;
+  const bootstrapDepth = bootstrapPayload?.followUpDepth ?? "simple";
+
+  const [phase, setPhase] = useState<VoicePhase>(skipBootstrap ? "complete" : "initializing");
+  const [questionText, setQuestionText] = useState(bootstrapQuestion);
+  const [difficulty, setDifficulty] = useState<Difficulty>(bootstrapDifficulty);
+  const [questionIndex, setQuestionIndex] = useState(bootstrapIndex);
   const [voiceSessionId, setVoiceSessionId] = useState<number | null>(null);
-  const [followUpDepth, setFollowUpDepth] = useState<FollowUpDepth>("simple");
+  const [followUpDepth, setFollowUpDepth] = useState<FollowUpDepth>(bootstrapDepth);
   const [error, setError] = useState<string | null>(null);
 
   const maxQuestions =
@@ -73,14 +91,14 @@ export function useVoiceDriver({
   adminConfigRef.current = adminConfig;
 
   const initSession = useCallback(
-    async (question: string, difficulty: Difficulty, qIndex: number) => {
+    async (question: string, diff: Difficulty, qIndex: number) => {
       try {
         const resp = await startAdaptiveVoiceSession({
           session_id: sessionId,
           question_text: question,
           question_index: qIndex,
           time_limit_seconds: timeLimitSeconds,
-          target_difficulty: difficulty,
+          target_difficulty: diff,
           learner_profile: learnerProfileRef.current,
           admin_config: adminConfigRef.current,
         } satisfies StartSessionPayload);
@@ -97,7 +115,8 @@ export function useVoiceDriver({
   );
 
   useEffect(() => {
-    void initSession(initialQuestion, initialDifficulty, 0);
+    if (skipBootstrap) return;
+    void initSession(bootstrapQuestion, bootstrapDifficulty, bootstrapIndex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -150,26 +169,7 @@ export function useVoiceDriver({
         const nextDepth = contract.follow_up_depth;
         const nextIndex = questionIndex + 1;
 
-        setQuestionText(nextQuestion);
-        setDifficulty(nextDifficulty);
-        setFollowUpDepth(nextDepth);
-        setQuestionIndex(nextIndex);
-        setPhase("transitioning");
-
-        const resp = await startAdaptiveVoiceSession({
-          session_id: sessionId,
-          question_text: nextQuestion,
-          question_index: nextIndex,
-          time_limit_seconds: timeLimitSeconds,
-          target_difficulty: nextDifficulty,
-          learner_profile: learnerProfileRef.current,
-          admin_config: adminConfigRef.current,
-        } satisfies StartSessionPayload);
-        setVoiceSessionId(resp.voice_session_id);
-
-        // Small delay before re-entering recording phase
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        setPhase("recording");
+        setPhase("complete");
 
         return {
           answerMessage,
@@ -181,7 +181,8 @@ export function useVoiceDriver({
               difficulty: nextDifficulty,
               questionIndex: nextIndex,
               followUpDepth: nextDepth,
-            },
+            } satisfies VoiceQuestionPayload,
+            nextQuestionIndex: nextIndex,
             transitionText: "Got it — next question…",
           },
         };
@@ -207,12 +208,18 @@ export function useVoiceDriver({
     setPhase("initializing");
     setError(null);
     setVoiceSessionId(null);
-    setQuestionIndex(0);
-    setQuestionText(initialQuestion);
-    setDifficulty(initialDifficulty);
-    setFollowUpDepth("simple");
-    void initSession(initialQuestion, initialDifficulty, 0);
-  }, [initialQuestion, initialDifficulty, initSession]);
+    setQuestionIndex(bootstrapIndex);
+    setQuestionText(bootstrapQuestion);
+    setDifficulty(bootstrapDifficulty);
+    setFollowUpDepth(bootstrapDepth);
+    void initSession(bootstrapQuestion, bootstrapDifficulty, bootstrapIndex);
+  }, [
+    bootstrapQuestion,
+    bootstrapDifficulty,
+    bootstrapIndex,
+    bootstrapDepth,
+    initSession,
+  ]);
 
   return {
     phase,

@@ -36,10 +36,14 @@ export interface NormalizedToolStep {
   tool: ToolType;
   isToolComplete: boolean;
   nextPayload: unknown | null;
+  nextQuestionIndex?: number;
   transitionText: string;
 }
+
+export type SubmitPhase = "preview" | "final";
 
 export interface SubmitResult {
   answerMessage: UserAnswerMessage;
   step: NormalizedToolStep;
+  phase?: SubmitPhase;
 }
