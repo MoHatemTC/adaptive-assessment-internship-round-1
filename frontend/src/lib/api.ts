@@ -185,6 +185,37 @@ export function createCodeSubmission(
   });
 }
 
+const TERMINAL_SUBMISSION_STATUSES = new Set<SubmissionStatus>([
+  "completed",
+  "failed",
+]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/** Create a sandbox submission and poll until execution finishes. */
+export async function createCodeSubmissionAndWait(
+  payload: CreateSubmissionRequest,
+  options?: { pollIntervalMs?: number; timeoutMs?: number },
+): Promise<SubmissionRead> {
+  const pollIntervalMs = options?.pollIntervalMs ?? 500;
+  const timeoutMs = options?.timeoutMs ?? 120_000;
+  const started = Date.now();
+
+  let submission = await createCodeSubmission(payload);
+  while (!TERMINAL_SUBMISSION_STATUSES.has(submission.status)) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error("Sandbox execution timed out");
+    }
+    await sleep(pollIntervalMs);
+    submission = await getCodeSubmission(submission.id);
+  }
+  return submission;
+}
+
 export function createAdaptiveCodeSubmission(
   payload: AdaptiveSubmitRequest,
 ): Promise<AdaptiveSubmitResponse> {
