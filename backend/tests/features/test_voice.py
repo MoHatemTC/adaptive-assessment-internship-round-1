@@ -141,7 +141,13 @@ async def test_transcript_stored_per_chunk(db_session, monkeypatch):
     )
     await db_session.commit()
 
-    async def fake_transcribe(audio_chunk: bytes, settings, logger) -> tuple[str, float]:
+    async def fake_transcribe(
+        audio_chunk: bytes,
+        settings,
+        logger,
+        *,
+        voice_session_id: int | None = None,
+    ) -> tuple[str, float]:
         return "hello world", 0.95
 
     # Isolate the LiteLLM transcription call — no network during tests.

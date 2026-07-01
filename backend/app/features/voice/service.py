@@ -11,6 +11,7 @@ later; scores are never surfaced to the learner.
 """
 
 from datetime import datetime, timezone
+import time
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -21,6 +22,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import Settings, get_settings
 from app.core.database import async_session
 from app.core.logging import get_logger
+from app.core.metrics import record_llm_call
 from app.features.voice.models import VoiceSession, VoiceTranscript
 from app.features.voice.schemas import VoiceTranscriptChunk
 
@@ -69,6 +71,8 @@ async def _transcribe_chunk(
     audio_chunk: bytes,
     settings: Settings,
     logger: Any,
+    *,
+    voice_session_id: int | None = None,
 ) -> tuple[str, float]:
     """Transcribe a single audio chunk via LiteLLM and return text + confidence.
 
@@ -92,6 +96,7 @@ async def _transcribe_chunk(
     audio_file = io.BytesIO(audio_chunk)
     audio_file.name = "audio.webm"
 
+    start = time.perf_counter()
     try:
         response = await litellm.atranscription(
             model=settings.TRANSCRIPTION_MODEL,
@@ -108,15 +113,32 @@ async def _transcribe_chunk(
             ) / len(response.segments)
             confidence = 1.0 - avg_no_speech
 
+        record_llm_call(
+            settings.TRANSCRIPTION_MODEL,
+            "voice_stt",
+            "success",
+            time.perf_counter() - start,
+        )
         logger.info(
             "whisper_transcription_ok",
+            voice_session_id=voice_session_id,
             chars=len(transcript_text),
             confidence=confidence,
         )
         return transcript_text, confidence
 
     except Exception as e:
-        logger.error("whisper_transcription_failed", error=str(e))
+        record_llm_call(
+            settings.TRANSCRIPTION_MODEL,
+            "voice_stt",
+            "error",
+            time.perf_counter() - start,
+        )
+        logger.error(
+            "whisper_transcription_failed",
+            voice_session_id=voice_session_id,
+            error=str(e),
+        )
         return "", 0.0
 
 
@@ -207,7 +229,10 @@ async def stream_audio_chunk(
         the persisted transcript delta.
     """
     transcript_text, confidence = await _transcribe_chunk(
-        audio_bytes, get_settings(), _logger
+        audio_bytes,
+        get_settings(),
+        _logger,
+        voice_session_id=voice_session_id,
     )
 
     async with async_session() as db:
