@@ -110,6 +110,9 @@ class Settings(BaseSettings):
     # ── HTTP ──────────────────────────────────────────────────────────────────
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
 
+    # ── Workers ───────────────────────────────────────────────────────────────
+    CELERY_PIPELINES: bool = False
+
     @field_validator("DATABASE_URL")
     @classmethod
     def _validate_database_url(cls, value: str) -> str:

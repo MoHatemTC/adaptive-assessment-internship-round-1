@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 
-from app.core.background_tasks import schedule_background
 from app.core.database import async_session
 from app.core.logging import get_logger
 from app.features.diagram.evaluation import evaluate_diagram_answer
@@ -234,23 +233,37 @@ def schedule_diagram_post_answer(
     answer_text: str,
     force: bool = False,
 ) -> None:
-    schedule_background(
-        _run_post_answer_pipeline(
+    from app.workers.pipeline_dispatch import dispatch_pipeline_task
+
+    dispatch_pipeline_task(
+        "pipelines.diagram.post_answer",
+        kwargs={
+            "session_id": session_id,
+            "question_index": question_index,
+            "diagram_response_id": diagram_response_id,
+            "question_id": question_id,
+            "answer_text": answer_text,
+        },
+        background_coro=_run_post_answer_pipeline(
             session_id=session_id,
             question_index=question_index,
             diagram_response_id=diagram_response_id,
             question_id=question_id,
             answer_text=answer_text,
         ),
-        key=f"diagram:post:{session_id}",
+        background_key=f"diagram:post:{session_id}",
         force=force,
     )
 
 
 def schedule_diagram_start(*, session_id: str, force: bool = False) -> None:
-    schedule_background(
-        _run_start_pipeline(session_id=session_id),
-        key=f"diagram:start:{session_id}",
+    from app.workers.pipeline_dispatch import dispatch_pipeline_task
+
+    dispatch_pipeline_task(
+        "pipelines.diagram.start",
+        kwargs={"session_id": session_id},
+        background_coro=_run_start_pipeline(session_id=session_id),
+        background_key=f"diagram:start:{session_id}",
         force=force,
     )
 

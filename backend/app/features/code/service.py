@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
+from celery.exceptions import TimeoutError as CeleryTimeoutError
 from fastapi import HTTPException, status
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -15,7 +17,7 @@ from app.features.code import (
     grading,
     llm_generation,
     loop,
-    tool,
+    sandbox_execution,
 )
 from app.features.code.languages import normalize_language
 from app.features.code.models import (
@@ -42,6 +44,7 @@ from app.features.code.schemas import (
 )
 from app.sessions.models import GradeResult
 from app.shared.schemas.memory import DimensionScore
+from app.workers.pipeline_dispatch import celery_pipelines_enabled
 
 
 def _test_case_to_dto(tc: TestCase) -> TestCaseDTO:
@@ -307,10 +310,13 @@ async def get_submission(db: AsyncSession, submission_id: int) -> SubmissionRead
             detail="Submission not found",
         )
 
+    return _submission_read_from_metadata(submission)
+
+
+def _submission_read_from_metadata(submission: CodeSubmission) -> SubmissionRead:
     metadata: dict = {}
     if submission.grading_metadata:
         metadata = json.loads(submission.grading_metadata)
-
     return _submission_to_read(
         submission,
         scores=metadata.get("scores"),
@@ -352,48 +358,48 @@ async def submit_code(db: AsyncSession, payload: SubmissionCreate) -> Submission
     )
     db.add(submission)
     await db.flush()
+    submission_id = submission.id
+    if submission_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist submission",
+        )
 
-    test_case_dtos = [_test_case_to_dto(tc) for tc in challenge.test_cases]
-    outcome, results, sandbox_error = await tool.execute_submission(
-        payload.submitted_code,
-        test_case_dtos,
-        language=challenge.language,
-        timeout_seconds=challenge.time_limit_seconds,
+    if celery_pipelines_enabled():
+        await db.commit()
+        from app.workers.pipeline_tasks import code_execute_submission_task
+
+        task = code_execute_submission_task.delay(submission_id=submission_id)
+        timeout = max(1, challenge.time_limit_seconds) + 20
+        try:
+            await asyncio.to_thread(task.get, timeout=timeout)
+        except CeleryTimeoutError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Sandbox execution timed out",
+            ) from exc
+
+        refreshed = await db.exec(
+            select(CodeSubmission).where(CodeSubmission.id == submission_id)
+        )
+        completed = refreshed.first()
+        if completed is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Submission missing after sandbox execution",
+            )
+        return _submission_read_from_metadata(completed)
+
+    await sandbox_execution.run_sandbox_for_submission(
+        db,
+        submission=submission,
+        challenge=challenge,
+        submitted_code=payload.submitted_code,
+        commit=False,
     )
-
-    overall_score = tool.compute_weighted_score(test_case_dtos, results)
-    passed = overall_score >= tool.PASS_THRESHOLD
-    scores = tool.build_rubric_scores(results, overall_score)
-    visible_results = tool.filter_visible_results(test_case_dtos, results)
-
-    metadata = {
-        "scores": scores,
-        "test_results": [r.model_dump() for r in visible_results],
-        "all_test_results": [r.model_dump() for r in results],
-        "total_tests": len(test_case_dtos),
-        "passed_tests": sum(1 for r in results if r.passed),
-        "hidden_tests_count": sum(1 for tc in test_case_dtos if tc.is_hidden),
-    }
-    if sandbox_error and outcome.value != "success":
-        metadata["error"] = sandbox_error
-
-    submission.status = SubmissionStatus.COMPLETED
-    submission.score = overall_score
-    submission.passed = passed
-    submission.grading_metadata = json.dumps(metadata)
-    db.add(submission)
     await db.commit()
     await db.refresh(submission)
-
-    return _submission_to_read(
-        submission,
-        scores=scores,
-        test_results=visible_results,
-        total_tests=metadata["total_tests"],
-        passed_tests=metadata["passed_tests"],
-        hidden_tests_count=metadata["hidden_tests_count"],
-        error=metadata.get("error"),
-    )
+    return _submission_read_from_metadata(submission)
 
 
 async def _find_idempotent_adaptive_submission(

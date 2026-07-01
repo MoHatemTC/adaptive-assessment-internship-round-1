@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 from app.core.database import async_session
@@ -62,14 +61,24 @@ def schedule_llm_grade_upgrade(
     question_index: int,
     difficulty: str,
 ) -> None:
-    """Fire-and-forget LLM rubric upgrade on the running event loop."""
-    asyncio.create_task(
-        run_llm_grade_upgrade(
+    """Fire-and-forget LLM rubric upgrade on a worker or the running event loop."""
+    from app.workers.pipeline_dispatch import dispatch_pipeline_task
+
+    dispatch_pipeline_task(
+        "pipelines.code.llm_grade_upgrade",
+        kwargs={
+            "grade_id": grade_id,
+            "session_id": session_id,
+            "question_index": question_index,
+            "difficulty": difficulty,
+        },
+        background_coro=run_llm_grade_upgrade(
             grade_id=grade_id,
             session_id=session_id,
             question_index=question_index,
             difficulty=difficulty,
-        )
+        ),
+        background_key=f"code:grade:{grade_id}",
     )
 
 
