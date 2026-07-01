@@ -57,11 +57,9 @@ def build_session_radar_report(session_id: str) -> dict[str, str]:
             await persist_session_judge_result(db, judge)
             report = await _build(db, session_id)
             await db.commit()
-            return {
-                "session_id": session_id,
-                "status": "built",
-                "overall_score": str(report.overall_score),
-            }
+            payload = report.model_dump(mode="json")
+            payload["status"] = "built"
+            return payload
 
     try:
         payload = _run_async(_inner())
