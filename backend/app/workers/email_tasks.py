@@ -13,6 +13,15 @@ from app.core.logging import get_logger
 from app.workers.celery_app import celery_app
 
 _logger = get_logger(__name__)
+_EMAIL_TASK_OPTS: dict[str, object] = {
+    "autoretry_for": (Exception,),
+    "retry_backoff": True,
+    "retry_backoff_max": 60,
+    "retry_jitter": True,
+    "max_retries": 3,
+    "time_limit": 300,
+    "soft_time_limit": 270,
+}
 
 
 def _resend_configured() -> bool:
@@ -117,7 +126,7 @@ def generate_radar_pdf(report: dict[str, Any]) -> bytes:
     return HTML(string=html_str).write_pdf()
 
 
-@celery_app.task(name="reports.email_session_report")
+@celery_app.task(name="reports.email_session_report", **_EMAIL_TASK_OPTS)
 def send_session_report_email(
     report: dict[str, Any],
     *,
