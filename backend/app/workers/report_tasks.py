@@ -10,6 +10,15 @@ from app.core.logging import get_logger
 from app.workers.celery_app import celery_app
 
 _logger = get_logger(__name__)
+_REPORT_TASK_OPTS: dict[str, object] = {
+    "autoretry_for": (Exception,),
+    "retry_backoff": True,
+    "retry_backoff_max": 60,
+    "retry_jitter": True,
+    "max_retries": 3,
+    "time_limit": 300,
+    "soft_time_limit": 270,
+}
 
 
 def _run_async(coro):
@@ -25,7 +34,7 @@ def _session_id_from_pipeline_state(pipeline_state: dict[str, Any] | str) -> str
     return session_id
 
 
-@celery_app.task(name="reports.run_session_judge")
+@celery_app.task(name="reports.run_session_judge", **_REPORT_TASK_OPTS)
 def run_session_judge_task(session_id: str) -> dict[str, str]:
     """Run the LLM judge for a completed session (isolated from report build)."""
     from app.agent.nodes.judge import (
@@ -64,7 +73,7 @@ def run_session_judge_task(session_id: str) -> dict[str, str]:
         raise
 
 
-@celery_app.task(name="reports.build_session_radar")
+@celery_app.task(name="reports.build_session_radar", **_REPORT_TASK_OPTS)
 def build_session_radar_report(pipeline_state: dict[str, str] | str) -> dict[str, str]:
     """Build radar report after judge confirmation (or pass-through on HITL hold)."""
     from app.reports.service import build_session_radar_report as _build
@@ -92,7 +101,7 @@ def build_session_radar_report(pipeline_state: dict[str, str] | str) -> dict[str
         raise
 
 
-@celery_app.task(name="reports.finalize_approved_session")
+@celery_app.task(name="reports.finalize_approved_session", **_REPORT_TASK_OPTS)
 def finalize_approved_session_report(session_id: str) -> dict[str, str]:
     """Build radar report after admin approves a held judge review."""
     return build_session_radar_report(session_id)
