@@ -66,6 +66,15 @@ class ExaminerRespondResponse(BaseModel):
     is_complete: bool
 
 
+class AssessmentIntakeConfig(BaseModel):
+    """Learner-safe assessment config, fetched before sign-in (no auth)."""
+
+    assessment_id: str
+    title: str
+    cv_required: bool
+    status: str
+
+
 class SessionListItem(BaseModel):
     """One row of an admin's completed-session listing for an assessment.
 

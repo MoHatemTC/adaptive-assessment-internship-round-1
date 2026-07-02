@@ -25,6 +25,7 @@ export default function AdminNewPage() {
     diagram: false,
     code: false,
   });
+  const [cvRequired, setCvRequired] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BlueprintGenerateResponse | null>(null);
@@ -44,6 +45,7 @@ export default function AdminNewPage() {
           title: title.trim(),
           prompt: prompt.trim(),
           tool_config: selected,
+          cv_required: cvRequired,
         });
         const generated = await generateBlueprint(created.id);
         setResult(generated);
@@ -53,7 +55,7 @@ export default function AdminNewPage() {
         setLoading(false);
       }
     },
-    [title, prompt, selected],
+    [title, prompt, selected, cvRequired],
   );
 
   const shareUrl =
@@ -129,6 +131,39 @@ export default function AdminNewPage() {
               ))}
             </div>
           </fieldset>
+
+          <div className="mt-4">
+            <p className="text-sm font-medium text-[#1F2430]">CV Upload</p>
+            <div className="mt-2 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setCvRequired(false)}
+                className={`rounded-lg border px-4 py-2 text-sm font-medium transition ${
+                  !cvRequired
+                    ? "border-[#004EFF] bg-[#CCE0FF] text-[#004EFF]"
+                    : "border-[#D8DDF0] bg-white text-[#1F2430]"
+                }`}
+              >
+                Optional
+              </button>
+              <button
+                type="button"
+                onClick={() => setCvRequired(true)}
+                className={`rounded-lg border px-4 py-2 text-sm font-medium transition ${
+                  cvRequired
+                    ? "border-[#004EFF] bg-[#CCE0FF] text-[#004EFF]"
+                    : "border-[#D8DDF0] bg-white text-[#1F2430]"
+                }`}
+              >
+                Required
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-[#606575]">
+              {cvRequired
+                ? "Learners must upload their CV to start this assessment."
+                : "Learners can optionally upload their CV."}
+            </p>
+          </div>
 
           {error && (
             <p className="rounded-lg border border-[#E5484D]/30 bg-[#E5484D]/5 p-3 text-sm text-[#E5484D]">

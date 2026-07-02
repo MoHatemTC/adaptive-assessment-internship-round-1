@@ -29,6 +29,8 @@ class AssessmentSession(Base):
         learner_profile_json: JSON learner context passed to the Generator Agent.
         status: Lifecycle state.
         code_session_id: Bridge to the coding tool's internal ``assess-*`` ID.
+        id_card_image_b64: Base64-encoded national ID card image uploaded at
+            intake for identity verification.
         started_at: Set when the learner begins the first question.
         completed_at: Set on completion or expiry.
         created_at: Server-set timestamp of row insertion.
@@ -51,6 +53,14 @@ class AssessmentSession(Base):
     )
     # "not_started" / "active" / "stopped"
     code_session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    id_card_image_b64: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "Base64-encoded national ID card image uploaded at intake for "
+            "identity verification"
+        ),
+    )
     examiner_state_json: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,

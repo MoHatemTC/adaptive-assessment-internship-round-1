@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy import Boolean, DateTime, String, Text, func
 
 from app.core.database import Base, Mapped, mapped_column
 
@@ -21,6 +21,7 @@ class Assessment(Base):
         blueprint_json: JSON question plans, tool config, and difficulty progression.
         tool_config: JSON tool enable flags per tool type.
         status: Lifecycle state: ``"draft"`` / ``"active"`` / ``"archived"``.
+        cv_required: Admin-controlled: whether CV upload is required for learners.
         created_at: Server-set timestamp of row insertion.
         updated_at: Server-set timestamp of last update.
     """
@@ -39,6 +40,12 @@ class Assessment(Base):
     # JSON: {"voice": true, "mcq": true, "diagram": true, "coding": true}
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
     # "draft" / "active" / "archived"
+    cv_required: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+        comment="Admin-controlled: whether CV upload is required for learners",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

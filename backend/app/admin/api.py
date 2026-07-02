@@ -54,6 +54,7 @@ def _to_assessment_read(row: Assessment) -> AssessmentRead:
         blueprint_json=_parse_json_field(row.blueprint_json),
         tool_config=_parse_json_field(row.tool_config),
         status=row.status,
+        cv_required=row.cv_required,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -103,6 +104,7 @@ async def create_assessment(
         blueprint_json=json.dumps(payload.blueprint_json),
         tool_config=json.dumps(payload.tool_config),
         status=payload.status,
+        cv_required=payload.cv_required,
     )
     db.add(row)
     await db.commit()

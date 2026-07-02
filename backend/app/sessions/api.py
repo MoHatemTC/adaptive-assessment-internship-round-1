@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -34,6 +35,7 @@ from app.proctoring import service as proctoring_service
 from app.proctoring.deps import require_active_proctored_session
 from app.sessions.models import AssessmentSession
 from app.sessions.schemas import (
+    AssessmentIntakeConfig,
     ExaminerRespondRequest,
     ExaminerRespondResponse,
     LearnerProfile,
@@ -91,27 +93,69 @@ async def _to_session_read(
     )
 
 
+@router.get("/intake-config/{assessment_id}", response_model=AssessmentIntakeConfig)
+async def get_intake_config(
+    request: Request,
+    assessment_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> AssessmentIntakeConfig:
+    """Return learner-safe assessment config before sign-in (no auth).
+
+    Args:
+        request: The inbound request (required by the rate-limited route class).
+        assessment_id: Target assessment UUID from the path.
+        db: Async database session dependency.
+
+    Returns:
+        Learner-safe config: title, whether a CV is required, and status.
+
+    Raises:
+        HTTPException: 404 if the assessment is missing, 403 if it is not active.
+    """
+    assessment = await db.get(Assessment, assessment_id)
+    if assessment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assessment not found",
+        )
+    if assessment.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This assessment is not currently active",
+        )
+    return AssessmentIntakeConfig(
+        assessment_id=assessment.id,
+        title=assessment.title,
+        cv_required=assessment.cv_required,
+        status=assessment.status,
+    )
+
+
 @router.post("/sign-in", response_model=SessionSignInResponse, status_code=201)
 async def sign_in(
     request: Request,
     assessment_id: str = Form(...),
     learner_profile: str = Form(...),
+    id_card_image: UploadFile = File(...),
     cv_file: UploadFile | None = File(None),
     db: AsyncSession = Depends(get_db),
 ) -> SessionSignInResponse:
-    """Create a pending learner session, optionally enriched from a CV PDF.
+    """Create a pending learner session from a national ID photo and profile.
 
-    Accepts ``multipart/form-data`` so an optional PDF CV can ride alongside the
-    learner profile. When a PDF is supplied it is parsed into structured context
-    and merged into the stored profile under ``cv_context``. CV parsing is
-    best-effort: a failed or empty parse simply omits ``cv_context`` and never
-    blocks sign-in.
+    Accepts ``multipart/form-data``. A national ID card image is always
+    required for identity verification. A CV PDF may also ride alongside the
+    learner profile — required or optional depending on the assessment's
+    ``cv_required`` flag. When a PDF is supplied it is parsed into structured
+    context and merged into the stored profile under ``cv_context``. CV
+    parsing is best-effort: a failed or empty parse simply omits
+    ``cv_context`` and never blocks sign-in.
 
     Args:
         request: The inbound request (required by the rate-limited route class).
         assessment_id: Target assessment UUID (multipart form field).
         learner_profile: JSON string of the learner profile (multipart form field).
-        cv_file: Optional uploaded PDF CV.
+        id_card_image: Required uploaded national ID card image.
+        cv_file: CV PDF, required or optional per the assessment's cv_required flag.
         db: Async database session dependency.
 
     Returns:
@@ -119,13 +163,26 @@ async def sign_in(
 
     Raises:
         HTTPException: 404 if the assessment is missing or inactive; 422 if the
-            ``learner_profile`` JSON is invalid.
+            ``learner_profile`` JSON is invalid, the ID card is not an image,
+            or a required CV was not provided.
     """
     assessment = await db.get(Assessment, assessment_id)
     if assessment is None or assessment.status != "active":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assessment not found or not active",
+        )
+
+    if assessment.cv_required and cv_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="CV upload is required for this assessment",
+        )
+
+    if not (id_card_image.content_type or "").startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ID card must be an image file (JPG or PNG)",
         )
 
     try:
@@ -149,6 +206,9 @@ async def sign_in(
         profile_data["cv_context"] = cv_context
     learner_profile_json = json.dumps(profile_data)
 
+    id_card_bytes = await id_card_image.read()
+    id_card_b64 = base64.b64encode(id_card_bytes).decode()
+
     raw_token = generate_session_token()
     expires_at = datetime.now(timezone.utc) + timedelta(hours=_SESSION_TTL_HOURS)
     row = AssessmentSession(
@@ -157,10 +217,18 @@ async def sign_in(
         status="pending",
         token_hash=hash_token(raw_token),
         expires_at=expires_at,
+        id_card_image_b64=id_card_b64,
     )
     db.add(row)
     await db.commit()
     await db.refresh(row)
+
+    _logger.info(
+        "learner_signed_in",
+        session_id=row.id,
+        has_cv=cv_file is not None,
+        has_id_card=True,
+    )
     return SessionSignInResponse(session_id=row.id, access_token=raw_token)
 
 

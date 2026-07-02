@@ -63,12 +63,14 @@ async function request<T>(
 export async function signInSession(
   assessmentId: string,
   learnerProfile: LearnerProfile,
-  cvFile?: File,
+  cvFile: File | undefined,
+  idCardFile: File,
 ): Promise<SessionSignInResponse> {
   const formData = new FormData();
   formData.append("assessment_id", assessmentId);
   formData.append("learner_profile", JSON.stringify(learnerProfile));
   if (cvFile) formData.append("cv_file", cvFile);
+  formData.append("id_card_image", idCardFile);
 
   // Raw fetch (not the JSON `request` helper) so the browser sets the
   // multipart boundary automatically. Do not set Content-Type manually.
