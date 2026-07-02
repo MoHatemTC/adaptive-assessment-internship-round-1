@@ -1,4 +1,12 @@
-"""LiteLLM vision completions with Kimi/reasoning-model-safe JSON parsing."""
+"""LiteLLM vision completions with Kimi/reasoning-model-safe JSON parsing.
+
+**Intentional gateway bypass (P2-A3):** Multimodal grading and proctoring VLM
+calls use ``litellm.acompletion`` here instead of :func:`app.core.llm.get_llm`
+because LangChain's chat wrapper does not carry image payloads the way diagram
+grading and camera proctoring require. This module is the *only* approved
+direct-``acompletion`` path for vision JSON. Speech-to-text uses
+:mod:`app.core.stt`; text LLM calls use :mod:`app.core.llm`.
+"""
 
 from __future__ import annotations
 

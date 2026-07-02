@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlmodel import select
@@ -17,7 +19,7 @@ from app.features.code.models import (
     SubmissionStatus,
 )
 from app.sessions.models import GradeResult, MemoryCard
-from app.shared.schemas.memory import DimensionSignals, RubricScores
+from app.shared.schemas.memory import DimensionSignals, MemoryCardRead, RubricScores
 
 
 def _rubric_json() -> str:
@@ -37,12 +39,12 @@ def _rubric_json() -> str:
 async def test_extract_memory_card_writes_both_tables(monkeypatch):
     session_id = str(uuid.uuid4())
     try:
-        await _run(session_id)
+        await _run(session_id, monkeypatch)
     finally:
         await engine.dispose()
 
 
-async def _run(session_id: str) -> None:
+async def _run(session_id: str, monkeypatch: pytest.MonkeyPatch) -> None:
     async with async_session() as db:
         challenge = CodeChallenge(
             title="Reverse String",
@@ -91,6 +93,44 @@ async def _run(session_id: str) -> None:
         )
         db.add(grade)
         await db.flush()
+
+        async def _fake_memory_agent(**kwargs: object) -> tuple[MemoryCardRead, str]:
+            card = MemoryCard(
+                session_id=str(kwargs["session_id"]),
+                tool_type="coding",
+                question_index=int(kwargs["question_index"]),  # type: ignore[arg-type]
+                difficulty=str(kwargs["difficulty"]),
+                evidence_summary="Agent evidence summary",
+                dimension_signals=DimensionSignals(
+                    thinking=True,
+                    soft=False,
+                    work=True,
+                    digital_ai=True,
+                    growth=False,
+                ).model_dump_json(),
+                passed=bool(kwargs["passed"]),
+            )
+            db.add(card)
+            await db.flush()
+            await db.refresh(card)
+            return (
+                MemoryCardRead(
+                    id=card.id or 0,
+                    session_id=card.session_id,
+                    tool_type="coding",
+                    question_index=card.question_index,
+                    difficulty=card.difficulty,  # type: ignore[arg-type]
+                    evidence_summary=card.evidence_summary,
+                    dimension_signals=DimensionSignals.model_validate_json(
+                        card.dimension_signals
+                    ),
+                    passed=card.passed,
+                    created_at=card.created_at or datetime.now(timezone.utc),
+                ),
+                "summary",
+            )
+
+        monkeypatch.setattr(evaluation, "run_memory_agent", _fake_memory_agent)
 
         card = await evaluation.extract_memory_card(
             db,

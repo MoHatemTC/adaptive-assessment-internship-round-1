@@ -11,7 +11,6 @@ later; scores are never surfaced to the learner.
 """
 
 from datetime import datetime, timezone
-import time
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -22,7 +21,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import Settings, get_settings
 from app.core.database import async_session
 from app.core.logging import get_logger
-from app.core.metrics import record_llm_call
+from app.core.stt import atranscribe_audio
+from app.core.tracing import LangfuseTraceContext
 from app.features.voice.models import VoiceSession, VoiceTranscript
 from app.features.voice.schemas import VoiceTranscriptChunk
 
@@ -73,73 +73,32 @@ async def _transcribe_chunk(
     logger: Any,
     *,
     voice_session_id: int | None = None,
+    session_id: str | None = None,
 ) -> tuple[str, float]:
-    """Transcribe a single audio chunk via LiteLLM and return text + confidence.
-
-    Isolates the LiteLLM transcription call so callers (and tests) can treat
-    transcription as a single seam.
-
-    Args:
-        audio_chunk: Raw audio payload for one streamed chunk.
-        settings: Application settings, used to resolve the STT model and the
-            LiteLLM proxy base URL.
-        logger: Structured logger used to record the outcome.
-
-    Returns:
-        A ``(transcript_text, confidence)`` tuple. ``transcript_text`` is an
-        empty string and ``confidence`` is ``0.0`` if transcription fails.
-    """
-    import io
-
-    import litellm
-
-    audio_file = io.BytesIO(audio_chunk)
-    audio_file.name = "audio.webm"
-
-    start = time.perf_counter()
-    try:
-        response = await litellm.atranscription(
-            model=settings.TRANSCRIPTION_MODEL,
-            file=audio_file,
-            api_base=settings.LITELLM_BASE_URL,
-            api_key=settings.LITELLM_API_KEY.get_secret_value(),
-        )
-        transcript_text = response.text or ""
-
-        confidence = 1.0
-        if hasattr(response, "segments") and response.segments:
-            avg_no_speech = sum(
-                s.get("no_speech_prob", 0.0) for s in response.segments
-            ) / len(response.segments)
-            confidence = 1.0 - avg_no_speech
-
-        record_llm_call(
-            settings.TRANSCRIPTION_MODEL,
-            "voice_stt",
-            "success",
-            time.perf_counter() - start,
-        )
+    """Transcribe a single audio chunk via the core STT gateway."""
+    result = await atranscribe_audio(
+        audio_chunk,
+        settings=settings,
+        trace=LangfuseTraceContext(
+            session_id=session_id,
+            operation="voice_stt",
+            tool="voice",
+        ),
+    )
+    if result.text:
         logger.info(
             "whisper_transcription_ok",
             voice_session_id=voice_session_id,
-            chars=len(transcript_text),
-            confidence=confidence,
+            chars=len(result.text),
+            confidence=result.confidence,
         )
-        return transcript_text, confidence
-
-    except Exception as e:
-        record_llm_call(
-            settings.TRANSCRIPTION_MODEL,
-            "voice_stt",
-            "error",
-            time.perf_counter() - start,
-        )
+    else:
         logger.error(
             "whisper_transcription_failed",
             voice_session_id=voice_session_id,
-            error=str(e),
+            error="empty transcript",
         )
-        return "", 0.0
+    return result.text, result.confidence
 
 
 async def create_voice_session(
@@ -228,11 +187,16 @@ async def stream_audio_chunk(
         A :class:`~app.features.voice.schemas.VoiceTranscriptChunk` describing
         the persisted transcript delta.
     """
+    async with async_session() as db:
+        voice_session = await db.get(VoiceSession, voice_session_id)
+        platform_session_id = voice_session.session_id if voice_session else None
+
     transcript_text, confidence = await _transcribe_chunk(
         audio_bytes,
         get_settings(),
         _logger,
         voice_session_id=voice_session_id,
+        session_id=platform_session_id,
     )
 
     async with async_session() as db:
