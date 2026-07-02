@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import uuid
 
+from datetime import datetime, timezone
+
 import pytest
 from sqlmodel import select
 
@@ -19,7 +21,58 @@ from app.sessions.models import (
     MemoryCard,
     SkillDimensionScore,
 )
-from app.shared.schemas.memory import RubricDimension, RubricScores
+from app.shared.schemas.memory import (
+    DimensionSignals,
+    MemoryCardRead,
+    RubricDimension,
+    RubricScores,
+)
+
+
+async def _fake_run_memory_agent(**kwargs: object) -> tuple[MemoryCardRead, str]:
+    """Persist a platform memory card like the real agent would (separate session)."""
+    async with async_session() as agent_db:
+        card = MemoryCard(
+            session_id=str(kwargs["session_id"]),
+            tool_type="coding",
+            question_index=int(kwargs["question_index"]),  # type: ignore[arg-type]
+            difficulty=str(kwargs["difficulty"]),
+            evidence_summary="Agent evidence summary",
+            dimension_signals=DimensionSignals(
+                thinking=True,
+                soft=False,
+                work=True,
+                digital_ai=True,
+                growth=False,
+            ).model_dump_json(),
+            passed=bool(kwargs["passed"]),
+        )
+        agent_db.add(card)
+        await agent_db.commit()
+        await agent_db.refresh(card)
+        return (
+            MemoryCardRead(
+                id=card.id or 0,
+                session_id=card.session_id,
+                tool_type="coding",
+                question_index=card.question_index,
+                difficulty=card.difficulty,  # type: ignore[arg-type]
+                evidence_summary=card.evidence_summary,
+                dimension_signals=DimensionSignals.model_validate_json(
+                    card.dimension_signals
+                ),
+                passed=card.passed,
+                created_at=card.created_at or datetime.now(timezone.utc),
+            ),
+            "summary",
+        )
+
+
+def _patch_memory_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.features.code.evaluation.run_memory_agent",
+        _fake_run_memory_agent,
+    )
 
 
 def _llm_rubric() -> RubricScores:
@@ -38,6 +91,7 @@ async def test_run_adaptive_loop_persists_all_layers(monkeypatch):
         return _llm_rubric()
 
     monkeypatch.setattr(grading, "_grade_with_llm", _fake_llm)
+    _patch_memory_agent(monkeypatch)
     session_id = str(uuid.uuid4())
     assessment_id = str(uuid.uuid4())
     try:
@@ -181,6 +235,7 @@ async def test_adaptive_submit_async_schedules_llm_upgrade(monkeypatch):
     )
     monkeypatch.setattr(service, "submit_code", _fast_sandbox)
     monkeypatch.setattr(grading, "_grade_with_llm", _fail_llm)
+    _patch_memory_agent(monkeypatch)
 
     session_id = str(uuid.uuid4())
     assessment_id = str(uuid.uuid4())

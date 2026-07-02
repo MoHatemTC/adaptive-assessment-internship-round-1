@@ -147,6 +147,7 @@ async def test_transcript_stored_per_chunk(db_session, monkeypatch):
         logger,
         *,
         voice_session_id: int | None = None,
+        session_id: str | None = None,
     ) -> tuple[str, float]:
         return "hello world", 0.95
 
