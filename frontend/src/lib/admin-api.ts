@@ -99,6 +99,7 @@ export interface AssessmentRead {
   blueprint_json: Record<string, unknown>;
   tool_config: Record<string, unknown>;
   status: string;
+  cv_required: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -135,6 +136,7 @@ export async function createAssessment(data: {
   title: string;
   prompt: string;
   tool_config: Record<string, boolean>;
+  cv_required: boolean;
 }): Promise<AssessmentRead> {
   const response = await adminFetch("/api/v1/admin/assessments", {
     method: "POST",

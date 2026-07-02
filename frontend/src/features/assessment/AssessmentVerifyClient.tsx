@@ -35,9 +35,23 @@ export function AssessmentVerifyClient({
   const [name, setName] = useState("");
   const [consent, setConsent] = useState(false);
   const [cvFile, setCvFile] = useState<File | undefined>();
+  const [idCardFile, setIdCardFile] = useState<File | undefined>();
+  const [cvRequired, setCvRequired] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+    fetch(`${API_BASE}/api/v1/sessions/intake-config/${assessmentId}`)
+      .then((r) => r.json())
+      .then((config) => {
+        setCvRequired(Boolean(config.cv_required));
+        setConfigLoaded(true);
+      })
+      .catch(() => setConfigLoaded(true));
+  }, [assessmentId]);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -77,6 +91,14 @@ export function AssessmentVerifyClient({
       setError("You must accept monitoring before continuing.");
       return;
     }
+    if (cvRequired && !cvFile) {
+      setError("Please upload your CV to continue.");
+      return;
+    }
+    if (!idCardFile) {
+      setError("Please upload your national ID card to continue.");
+      return;
+    }
     const video = videoRef.current;
     const frame = video ? captureVideoFrame(video) : null;
     if (!frame) {
@@ -94,6 +116,7 @@ export function AssessmentVerifyClient({
           consent_given: true,
         },
         cvFile,
+        idCardFile,
       );
 
       let verification;
@@ -129,7 +152,15 @@ export function AssessmentVerifyClient({
       setError(err instanceof Error ? err.message : "Verification failed");
       setLoading(false);
     }
-  }, [assessmentId, consent, name, cvFile, router, stopCamera]);
+  }, [assessmentId, consent, name, cvFile, cvRequired, idCardFile, router, stopCamera]);
+
+  if (!configLoaded) {
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col items-center justify-center px-4 py-8">
+        <p className="text-sm text-neutral/70">Loading assessment details...</p>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center gap-6 px-4 py-8">
@@ -173,7 +204,12 @@ export function AssessmentVerifyClient({
       </label>
 
       <label className="block text-sm text-neutral">
-        <span className="mb-1 block font-medium">Upload your CV (optional)</span>
+        <span className="mb-1 block font-medium">
+          CV Upload{" "}
+          <span className={cvRequired ? "text-error" : "text-neutral/60"}>
+            {cvRequired ? "(Required)" : "(Optional)"}
+          </span>
+        </span>
         <input
           type="file"
           accept=".pdf"
@@ -181,7 +217,25 @@ export function AssessmentVerifyClient({
           className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm"
         />
         <span className="mt-1 block text-xs text-neutral/60">
-          Your CV helps us personalize the assessment
+          {cvRequired
+            ? "A CV is required for this assessment."
+            : "Uploading your CV helps personalize the assessment."}
+        </span>
+      </label>
+
+      <label className="block text-sm text-neutral">
+        <span className="mb-1 block font-medium">
+          National ID Card <span className="text-error">(Required)</span>
+        </span>
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/jpg"
+          onChange={(event) => setIdCardFile(event.target.files?.[0])}
+          className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm"
+        />
+        <span className="mt-1 block text-xs text-neutral/60">
+          Upload a clear photo of your national ID card for identity
+          verification. Accepted formats: JPG, PNG.
         </span>
       </label>
 

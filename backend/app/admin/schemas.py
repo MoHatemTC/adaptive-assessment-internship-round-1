@@ -22,6 +22,7 @@ class AssessmentCreate(BaseModel):
     blueprint_json: dict[str, Any] = Field(default_factory=dict)
     tool_config: dict[str, Any] = Field(default_factory=dict)
     status: str = "draft"
+    cv_required: bool = False
 
 
 class AssessmentUpdate(BaseModel):
@@ -39,6 +40,7 @@ class AssessmentRead(BaseModel):
     blueprint_json: dict[str, Any]
     tool_config: dict[str, Any]
     status: str
+    cv_required: bool
     created_at: datetime
     updated_at: datetime
 
